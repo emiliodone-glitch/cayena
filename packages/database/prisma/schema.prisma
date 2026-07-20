@@ -1,0 +1,312 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  SUPERADMIN
+  JEFE_SECRETARIA
+  PROMOTOR
+  AUDITOR
+  DIRIGENCIA
+  MILITANTE
+}
+
+enum CategoriaObra {
+  EDUCACION
+  SALUD
+  VIALIDAD
+  VIVIENDA
+  DEPORTE
+  AGUA_SANEAMIENTO
+  ELECTRICIDAD
+  SEGURIDAD
+  OTRA
+}
+
+enum TipoMovimiento {
+  INGRESO
+  GASTO
+}
+
+// ---------------------------------------------------------------------------
+// Geografía real (RF-13): provincias y municipios cargados desde GeoJSON
+// (geoBoundaries DOM ADM1/ADM2, límites territoriales reales) via seed.
+// ---------------------------------------------------------------------------
+
+model Provincia {
+  id      String @id // slug, coincide con properties.id del GeoJSON
+  codigo  String @unique // ISO 3166-2:DO, ej. DO-25
+  nombre  String
+
+  municipios   Municipio[]
+  militantes   Militante[]
+  obras        Obra[]
+  metas        MetaMilitantes[]
+
+  createdAt DateTime @default(now())
+}
+
+model Municipio {
+  id          String @id // slug compuesto `${provinciaId}__${municipioSlug}`
+  nombre      String
+  provinciaId String
+  provincia   Provincia @relation(fields: [provinciaId], references: [id])
+
+  militantes Militante[]
+  obras      Obra[]
+  metas      MetaMilitantes[]
+
+  createdAt DateTime @default(now())
+
+  @@index([provinciaId])
+}
+
+// ---------------------------------------------------------------------------
+// Usuarios y secretarías
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  nombre       String
+  telefono     String?
+  role         Role     @default(MILITANTE)
+  active       Boolean  @default(true)
+
+  // Alcance del promotor/jefe de secretaría
+  secretariaId String?
+  secretaria   Secretaria? @relation(fields: [secretariaId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  actividadesCreadas Actividad[]      @relation("ActividadCreador")
+  obrasCreadas       Obra[]           @relation("ObraCreador")
+  militantesCaptados Militante[]      @relation("MilitanteCapturador")
+  gastosRegistrados  Gasto[]          @relation("GastoRegistrador")
+  avancesRegistrados AvancePOA[]      @relation("AvanceRegistrador")
+  refreshTokens      RefreshToken[]
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Secretaria {
+  id          String  @id @default(cuid())
+  nombre      String  @unique
+  descripcion String?
+
+  usuarios    User[]
+  actividades Actividad[]
+  documentos  DocumentoSecretaria[]
+  gastos      Gasto[]
+  metasPoa    MetaPOA[]
+
+  createdAt DateTime @default(now())
+}
+
+model DocumentoSecretaria {
+  id           String   @id @default(cuid())
+  secretariaId String
+  secretaria   Secretaria @relation(fields: [secretariaId], references: [id])
+  titulo       String
+  url          String
+  subidoPorId  String?
+  createdAt    DateTime @default(now())
+
+  @@index([secretariaId])
+}
+
+// ---------------------------------------------------------------------------
+// Actividades
+// ---------------------------------------------------------------------------
+
+model Actividad {
+  id             String   @id @default(cuid())
+  titulo         String
+  descripcion    String?
+  fecha          DateTime
+  ubicacion      String?
+  lat            Float?
+  lng            Float?
+  fotos          String[]
+  secretariaId   String
+  secretaria     Secretaria @relation(fields: [secretariaId], references: [id])
+  publicadaApp   Boolean  @default(false)
+
+  creadoPorId String
+  creadoPor   User   @relation("ActividadCreador", fields: [creadoPorId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([secretariaId])
+  @@index([fecha])
+}
+
+// ---------------------------------------------------------------------------
+// Obras de gobierno
+// ---------------------------------------------------------------------------
+
+model Obra {
+  id          String        @id @default(cuid())
+  titulo      String
+  resena      String
+  categoria   CategoriaObra
+  fotos       String[]
+  lat         Float
+  lng         Float
+
+  provinciaId String
+  provincia   Provincia @relation(fields: [provinciaId], references: [id])
+  municipioId String
+  municipio   Municipio @relation(fields: [municipioId], references: [id])
+
+  publicada Boolean @default(false)
+
+  creadoPorId String
+  creadoPor   User   @relation("ObraCreador", fields: [creadoPorId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([provinciaId])
+  @@index([municipioId])
+  @@index([publicada])
+}
+
+// ---------------------------------------------------------------------------
+// Militantes / votantes
+// ---------------------------------------------------------------------------
+
+model Militante {
+  id        String  @id @default(cuid())
+  nombre    String
+  cedula    String  @unique
+  telefono  String?
+  direccion String?
+
+  provinciaId      String
+  provincia        Provincia @relation(fields: [provinciaId], references: [id])
+  municipioId      String
+  municipio        Municipio @relation(fields: [municipioId], references: [id])
+  localidad        String?
+  recintoElectoral String?
+
+  lat Float?
+  lng Float?
+
+  consentimientoDatos Boolean @default(false)
+
+  // Nulo cuando el registro proviene del auto-registro público en la app (RF-26);
+  // con valor cuando lo captura un promotor/digitador desde el back office (RF-11).
+  capturadoPorId String?
+  capturadoPor   User?   @relation("MilitanteCapturador", fields: [capturadoPorId], references: [id])
+  origen         String  @default("BACKOFFICE") // BACKOFFICE | APP_PUBLICA
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([provinciaId])
+  @@index([municipioId])
+  @@index([cedula])
+  @@index([telefono])
+}
+
+// Meta de militantes vigente por demarcación (provincia o municipio).
+// Editable/modificable cada cierto tiempo (RF-12): se guarda historial,
+// la meta "activa" es la de vigenciaFin nula o mayor a la fecha actual.
+model MetaMilitantes {
+  id          String     @id @default(cuid())
+  provinciaId String?
+  provincia   Provincia? @relation(fields: [provinciaId], references: [id])
+  municipioId String?
+  municipio   Municipio? @relation(fields: [municipioId], references: [id])
+
+  meta          Int
+  vigenciaDesde DateTime @default(now())
+  vigenciaHasta DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([provinciaId])
+  @@index([municipioId])
+}
+
+// ---------------------------------------------------------------------------
+// Finanzas
+// ---------------------------------------------------------------------------
+
+model Gasto {
+  id             String         @id @default(cuid())
+  tipo           TipoMovimiento
+  monto          Decimal        @db.Decimal(14, 2)
+  categoria      String
+  fecha          DateTime
+  comprobanteUrl String?
+
+  secretariaId String?
+  secretaria   Secretaria? @relation(fields: [secretariaId], references: [id])
+
+  registradoPorId String
+  registradoPor   User   @relation("GastoRegistrador", fields: [registradoPorId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([secretariaId])
+  @@index([fecha])
+  @@index([tipo])
+}
+
+// ---------------------------------------------------------------------------
+// POA (Plan Operativo Anual) por secretaría
+// ---------------------------------------------------------------------------
+
+model MetaPOA {
+  id                String   @id @default(cuid())
+  secretariaId      String
+  secretaria        Secretaria @relation(fields: [secretariaId], references: [id])
+  nombre            String
+  descripcion       String?
+  indicadorObjetivo Float
+  fechaLimite       DateTime
+
+  avances AvancePOA[]
+
+  createdAt DateTime @default(now())
+
+  @@index([secretariaId])
+}
+
+model AvancePOA {
+  id        String  @id @default(cuid())
+  metaPoaId String
+  metaPoa   MetaPOA @relation(fields: [metaPoaId], references: [id], onDelete: Cascade)
+  valor     Float
+  fecha     DateTime @default(now())
+  nota      String?
+
+  registradoPorId String
+  registradoPor   User   @relation("AvanceRegistrador", fields: [registradoPorId], references: [id])
+
+  @@index([metaPoaId])
+}

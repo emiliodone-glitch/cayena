@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "Cayena",
+    "slug": "cayena-fp",
+    "scheme": "cayena",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "backgroundColor": "#1f7a34"
+    },
+    "plugins": ["expo-router", "expo-location"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "do.fuerzadelpueblo.cayena",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Cayena usa tu ubicación para registrar tu municipio al unirte y mostrarte las obras cercanas."
+      }
+    },
+    "android": {
+      "package": "do.fuerzadelpueblo.cayena",
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
+    }
+  }
+}
