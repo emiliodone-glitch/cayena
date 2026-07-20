@@ -17,14 +17,16 @@ import { transparenciaRouter } from "./routes/transparencia.routes";
 import { UPLOADS_DIR } from "./lib/storage";
 import { errorHandler } from "./middleware/errorHandler";
 
+function resolveCorsOrigin(): string | string[] {
+  const raw = process.env.CORS_ORIGIN;
+  if (!raw || raw === "*") return "*";
+  return raw.split(",").map((o) => o.trim());
+}
+
 export function createApp() {
   const app = express();
 
-  app.use(
-    cors({
-      origin: process.env.CORS_ORIGIN?.split(",") ?? "*",
-    }),
-  );
+  app.use(cors({ origin: resolveCorsOrigin() }));
   app.use(express.json({ limit: "10mb" }));
   app.use("/files", express.static(UPLOADS_DIR));
 

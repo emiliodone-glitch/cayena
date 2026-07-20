@@ -32,6 +32,11 @@ export function MapaMilitantes() {
 
   useEffect(() => {
     setLoading(true);
+    // Importante: el layer de <GeoJSON> de react-leaflet es inmutable una vez
+    // creado — cambiar solo el prop `data` no redibuja la geometría, hace
+    // falta que cambie el `key`. Limpiamos `geo` aquí para que el layer viejo
+    // se desmonte de inmediato y el nuevo se monte fresco cuando llegue el fetch.
+    setGeo(null);
     const path =
       nivel === "nacional" ? "/geo/provincias" : `/geo/provincias/${provinciaSeleccionada?.id}/municipios`;
     apiFetch<FeatureCollection>(path)
