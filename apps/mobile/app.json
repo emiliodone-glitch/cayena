@@ -8,9 +8,11 @@
     "userInterfaceStyle": "automatic",
     "icon": "./assets/icon.png",
     "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
       "backgroundColor": "#1f7a34"
     },
-    "plugins": ["expo-router", "expo-location"],
+    "plugins": ["expo-router", "expo-location", "expo-notifications"],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "do.fuerzadelpueblo.cayena",
@@ -20,7 +22,19 @@
     },
     "android": {
       "package": "do.fuerzadelpueblo.cayena",
-      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1f7a34"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "REEMPLAZAR_TRAS_EAS_INIT"
+      }
     }
   }
 }

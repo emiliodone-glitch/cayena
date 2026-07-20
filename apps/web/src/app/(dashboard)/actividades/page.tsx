@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { FotoUploader } from "@/components/FotoUploader";
 
 type Actividad = {
   id: string;
@@ -29,6 +30,7 @@ export default function ActividadesPage() {
   const [mesActual, setMesActual] = useState(() => new Date());
   const [diaSeleccionado, setDiaSeleccionado] = useState<Date | null>(null);
   const [form, setForm] = useState({ titulo: "", descripcion: "", fecha: "", ubicacion: "", secretariaId: "" });
+  const [fotos, setFotos] = useState<string[]>([]);
 
   function cargar() {
     apiFetch<Actividad[]>("/actividades").then(setActividades);
@@ -58,9 +60,10 @@ export default function ActividadesPage() {
     e.preventDefault();
     await apiFetch("/actividades", {
       method: "POST",
-      body: JSON.stringify({ ...form, publicadaApp: false }),
+      body: JSON.stringify({ ...form, fotos, publicadaApp: false }),
     });
     setForm({ titulo: "", descripcion: "", fecha: "", ubicacion: "", secretariaId: "" });
+    setFotos([]);
     cargar();
   }
 
@@ -215,6 +218,7 @@ export default function ActividadesPage() {
               <option key={s.id} value={s.id}>{s.nombre}</option>
             ))}
           </select>
+          <FotoUploader fotos={fotos} onChange={setFotos} />
           <button className="rounded-lg bg-institucional-600 px-4 py-2 text-sm font-semibold text-white hover:bg-institucional-700">
             Crear actividad
           </button>

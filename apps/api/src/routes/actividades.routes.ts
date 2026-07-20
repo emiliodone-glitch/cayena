@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@cayena/database";
 import { requireAuth } from "../middleware/auth";
 import { asyncRoute, HttpError } from "../middleware/errorHandler";
+import { enviarPushATodos } from "../lib/push";
 
 export const actividadesRouter = Router();
 
@@ -83,6 +84,9 @@ actividadesRouter.post(
     const actividad = await prisma.actividad.create({
       data: { ...data, creadoPorId: req.user!.id },
     });
+    if (actividad.publicadaApp) {
+      enviarPushATodos("Nueva actividad", actividad.titulo, "ACTIVIDAD").catch(() => {});
+    }
     res.status(201).json(actividad);
   }),
 );
@@ -103,6 +107,9 @@ actividadesRouter.patch(
       where: { id: req.params.id },
       data: { publicadaApp },
     });
+    if (!actividad.publicadaApp && publicadaApp) {
+      enviarPushATodos("Nueva actividad", updated.titulo, "ACTIVIDAD").catch(() => {});
+    }
     res.json(updated);
   }),
 );

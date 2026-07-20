@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useLocalSearchParams } from "expo-router";
-import { apiFetch } from "@/api/client";
+import { apiFetch, API_URL } from "@/api/client";
+
+function resolveUrl(url: string) {
+  return url.startsWith("http") ? url : `${API_URL}${url}`;
+}
 
 type Obra = {
   id: string;
@@ -32,7 +36,7 @@ export default function DetalleObraScreen() {
   return (
     <ScrollView style={{ flex: 1, backgroundColor: "#fff" }}>
       {obra.fotos[0] ? (
-        <Image source={{ uri: obra.fotos[0] }} style={styles.foto} />
+        <Image source={{ uri: resolveUrl(obra.fotos[0]) }} style={styles.foto} />
       ) : (
         <View style={[styles.foto, styles.fotoPlaceholder]} />
       )}

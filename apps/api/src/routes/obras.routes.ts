@@ -3,6 +3,7 @@ import { z } from "zod";
 import { CategoriaObra, prisma } from "@cayena/database";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { asyncRoute } from "../middleware/errorHandler";
+import { enviarPushATodos } from "../lib/push";
 
 export const obrasRouter = Router();
 
@@ -70,6 +71,9 @@ obrasRouter.post(
   asyncRoute(async (req, res) => {
     const data = obraSchema.parse(req.body);
     const obra = await prisma.obra.create({ data: { ...data, creadoPorId: req.user!.id } });
+    if (obra.publicada) {
+      enviarPushATodos("Nueva obra de gobierno", obra.titulo, "OBRA").catch(() => {});
+    }
     res.status(201).json(obra);
   }),
 );
@@ -79,7 +83,11 @@ obrasRouter.patch(
   requireRole("SUPERADMIN", "JEFE_SECRETARIA", "PROMOTOR"),
   asyncRoute(async (req, res) => {
     const data = obraSchema.partial().parse(req.body);
+    const anterior = await prisma.obra.findUniqueOrThrow({ where: { id: req.params.id } });
     const obra = await prisma.obra.update({ where: { id: req.params.id }, data });
+    if (!anterior.publicada && obra.publicada) {
+      enviarPushATodos("Nueva obra de gobierno", obra.titulo, "OBRA").catch(() => {});
+    }
     res.json(obra);
   }),
 );

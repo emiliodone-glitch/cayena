@@ -10,11 +10,16 @@ import {
   View,
 } from "react-native";
 import * as Location from "expo-location";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { apiFetch, ApiError } from "@/api/client";
+import { MI_MILITANTE_ID_KEY, MI_MILITANTE_NOMBRE_KEY } from "@/lib/carnet";
+import { encolarRegistro } from "@/lib/offlineQueue";
+import { useOffline } from "@/lib/offlineContext";
 
 type Lista = { id: string; nombre: string }[];
 
 export default function UnirmeScreen() {
+  const { conectado, pendientes, refrescarPendientes } = useOffline();
   const [provincias, setProvincias] = useState<Lista>([]);
   const [municipios, setMunicipios] = useState<Lista>([]);
   const [nombre, setNombre] = useState("");
@@ -27,6 +32,8 @@ export default function UnirmeScreen() {
   const [ubicacionEstado, setUbicacionEstado] = useState("Detectando ubicación…");
   const [enviando, setEnviando] = useState(false);
   const [enviado, setEnviado] = useState(false);
+  const [guardadoOffline, setGuardadoOffline] = useState(false);
+  const [puntos, setPuntos] = useState<number | null>(null);
 
   useEffect(() => {
     apiFetch<Lista>("/geo/lista/provincias", {}, false).then(setProvincias);
@@ -55,28 +62,49 @@ export default function UnirmeScreen() {
       Alert.alert("Consentimiento requerido", "Debes aceptar el uso de tus datos personales (Ley 172-13).");
       return;
     }
+    const payload = {
+      nombre,
+      cedula,
+      telefono,
+      provinciaId,
+      municipioId,
+      lat: coords?.lat,
+      lng: coords?.lng,
+      consentimientoDatos: true as const,
+    };
+
+    // Fase 2 — modo offline: si ya sabemos que no hay conexión, encolamos directo.
+    if (!conectado) {
+      await encolarRegistro(payload);
+      refrescarPendientes();
+      setGuardadoOffline(true);
+      setEnviado(true);
+      return;
+    }
+
     setEnviando(true);
     try {
-      await apiFetch(
+      const militante = await apiFetch<{ id: string }>(
         "/militantes/registro-publico",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            nombre,
-            cedula,
-            telefono,
-            provinciaId,
-            municipioId,
-            lat: coords?.lat,
-            lng: coords?.lng,
-            consentimientoDatos: true,
-          }),
-        },
+        { method: "POST", body: JSON.stringify(payload) },
         false,
       );
+      await AsyncStorage.setItem(MI_MILITANTE_ID_KEY, militante.id);
+      await AsyncStorage.setItem(MI_MILITANTE_NOMBRE_KEY, nombre);
       setEnviado(true);
+      apiFetch<{ puntos: number }>(`/militantes/mi-progreso/${cedula}`, {}, false)
+        .then((p) => setPuntos(p.puntos))
+        .catch(() => {});
     } catch (err) {
-      Alert.alert("No se pudo registrar", err instanceof ApiError ? err.message : "Intenta de nuevo");
+      if (err instanceof ApiError) {
+        Alert.alert("No se pudo registrar", err.message);
+      } else {
+        // Fallo de red aunque NetInfo reportara conexión: igual lo guardamos para reintentar.
+        await encolarRegistro(payload);
+        refrescarPendientes();
+        setGuardadoOffline(true);
+        setEnviado(true);
+      }
     } finally {
       setEnviando(false);
     }
@@ -86,13 +114,37 @@ export default function UnirmeScreen() {
     return (
       <View style={styles.center}>
         <Text style={styles.exitoTitulo}>¡Bienvenido a Fuerza del Pueblo!</Text>
-        <Text style={styles.exitoTexto}>Tu registro fue recibido correctamente.</Text>
+        <Text style={styles.exitoTexto}>
+          {guardadoOffline
+            ? "No detectamos conexión: tu registro se guardó en el dispositivo y se enviará automáticamente en cuanto recuperes internet."
+            : "Tu registro fue recibido correctamente."}
+        </Text>
+        {puntos !== null && (
+          <View style={styles.insigniaBox}>
+            <Text style={styles.insigniaTexto}>🏅 Insignia "Bienvenida" obtenida</Text>
+            <Text style={styles.insigniaPuntos}>{puntos} puntos</Text>
+          </View>
+        )}
       </View>
     );
   }
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: "#fff" }} contentContainerStyle={styles.container}>
+      {!conectado && (
+        <View style={styles.offlineBanner}>
+          <Text style={styles.offlineBannerTexto}>
+            Sin conexión: tu registro se guardará y enviará automáticamente más tarde.
+          </Text>
+        </View>
+      )}
+      {conectado && pendientes > 0 && (
+        <View style={styles.offlineBannerInfo}>
+          <Text style={styles.offlineBannerInfoTexto}>
+            Sincronizando {pendientes} registro{pendientes > 1 ? "s" : ""} pendiente{pendientes > 1 ? "s" : ""}…
+          </Text>
+        </View>
+      )}
       <Text style={styles.header}>Únete a FP</Text>
 
       <TextInput style={styles.input} placeholder="Nombre completo" value={nombre} onChangeText={setNombre} />
@@ -181,4 +233,18 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
   exitoTitulo: { fontSize: 20, fontWeight: "700", color: "#123f1c", textAlign: "center" },
   exitoTexto: { marginTop: 8, fontSize: 14, color: "#4b5563", textAlign: "center" },
+  insigniaBox: {
+    marginTop: 20,
+    backgroundColor: "#d6f5dd",
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    alignItems: "center",
+  },
+  insigniaTexto: { fontSize: 14, fontWeight: "600", color: "#123f1c" },
+  insigniaPuntos: { fontSize: 12, color: "#1f7a34", marginTop: 2 },
+  offlineBanner: { backgroundColor: "#fef3c7", borderRadius: 10, padding: 10, marginBottom: 14 },
+  offlineBannerTexto: { fontSize: 12, color: "#92400e", textAlign: "center" },
+  offlineBannerInfo: { backgroundColor: "#e0f2fe", borderRadius: 10, padding: 10, marginBottom: 14 },
+  offlineBannerInfoTexto: { fontSize: 12, color: "#075985", textAlign: "center" },
 });

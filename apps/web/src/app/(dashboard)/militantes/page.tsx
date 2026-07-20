@@ -33,12 +33,20 @@ export default function MilitantesPage() {
     <div>
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-xl font-bold text-institucional-900">Militantes por provincia</h1>
-        <Link
-          href="/militantes/nuevo"
-          className="rounded-lg bg-institucional-600 px-4 py-2 text-sm font-semibold text-white hover:bg-institucional-700"
-        >
-          + Registrar militante
-        </Link>
+        <div className="flex gap-2">
+          <Link
+            href="/militantes/carnet"
+            className="rounded-lg border border-institucional-600 px-4 py-2 text-sm font-semibold text-institucional-700 hover:bg-institucional-50"
+          >
+            Verificar carnet
+          </Link>
+          <Link
+            href="/militantes/nuevo"
+            className="rounded-lg bg-institucional-600 px-4 py-2 text-sm font-semibold text-white hover:bg-institucional-700"
+          >
+            + Registrar militante
+          </Link>
+        </div>
       </div>
 
       <MapaMilitantes />

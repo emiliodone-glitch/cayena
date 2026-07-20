@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@cayena/database";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { asyncRoute, HttpError } from "../middleware/errorHandler";
+import { otorgarInsigniaBienvenida } from "../lib/gamificacion";
 
 export const militantesRouter = Router();
 
@@ -29,11 +30,75 @@ militantesRouter.post(
     const militante = await prisma.militante.create({
       data: { ...data, origen: "APP_PUBLICA" },
     });
+    await otorgarInsigniaBienvenida(militante.id);
     res.status(201).json(militante);
   }),
 );
 
+// Fase 2 — gamificación: el propio militante consulta su progreso con su cédula
+// (no hay cuenta de usuario para el auto-registro público, RF-26).
+militantesRouter.get(
+  "/mi-progreso/:cedula",
+  asyncRoute(async (req, res) => {
+    const militante = await prisma.militante.findUnique({
+      where: { cedula: req.params.cedula },
+      select: {
+        id: true,
+        nombre: true,
+        puntos: true,
+        insignias: {
+          select: { otorgadaAt: true, insignia: { select: { codigo: true, nombre: true, descripcion: true, puntos: true } } },
+        },
+      },
+    });
+    if (!militante) throw new HttpError(404, "No se encontró un registro con esa cédula");
+    res.json(militante);
+  }),
+);
+
+// Fase 2 — ranking básico de gamificación (nombre parcial, sin datos sensibles).
+militantesRouter.get(
+  "/ranking",
+  asyncRoute(async (_req, res) => {
+    const top = await prisma.militante.findMany({
+      where: { puntos: { gt: 0 } },
+      orderBy: { puntos: "desc" },
+      take: 20,
+      select: { nombre: true, puntos: true, provincia: { select: { nombre: true } } },
+    });
+    res.json(
+      top.map((m) => {
+        const partes = m.nombre.trim().split(/\s+/);
+        const nombreParcial =
+          partes.length > 1 ? `${partes[0]} ${partes[partes.length - 1].charAt(0)}.` : partes[0];
+        return { nombre: nombreParcial, puntos: m.puntos, provincia: m.provincia.nombre };
+      }),
+    );
+  }),
+);
+
 militantesRouter.use(requireAuth);
+
+// Fase 2 — carnet digital con QR: el QR codifica el id interno del militante;
+// el back office lo verifica escaneándolo/pegándolo aquí (RF de "Carnet digital con código QR").
+militantesRouter.get(
+  "/carnet/:id",
+  asyncRoute(async (req, res) => {
+    const militante = await prisma.militante.findUnique({
+      where: { id: req.params.id },
+      select: {
+        id: true,
+        nombre: true,
+        cedula: true,
+        provincia: { select: { nombre: true } },
+        municipio: { select: { nombre: true } },
+        createdAt: true,
+      },
+    });
+    if (!militante) throw new HttpError(404, "Carnet no válido: no existe ningún militante con ese código");
+    res.json({ ...militante, estado: "activo" });
+  }),
+);
 
 const querySchema = z.object({
   provinciaId: z.string().optional(),
@@ -106,6 +171,7 @@ militantesRouter.post(
     const militante = await prisma.militante.create({
       data: { ...data, capturadoPorId: req.user!.id, origen: "BACKOFFICE" },
     });
+    await otorgarInsigniaBienvenida(militante.id);
     res.status(201).json(militante);
   }),
 );

@@ -16,11 +16,15 @@ type Resumen = {
 
 const fmtMoney = new Intl.NumberFormat("es-DO", { style: "currency", currency: "DOP", maximumFractionDigits: 0 });
 
+type Alerta = { id: string; titulo: string; cuerpo: string; enviadaAt: string };
+
 export default function DashboardPage() {
   const [resumen, setResumen] = useState<Resumen | null>(null);
+  const [alertas, setAlertas] = useState<Alerta[]>([]);
 
   useEffect(() => {
     apiFetch<Resumen>("/dashboard/resumen").then(setResumen).catch(() => setResumen(null));
+    apiFetch<Alerta[]>("/dashboard/alertas").then(setAlertas).catch(() => setAlertas([]));
   }, []);
 
   return (
@@ -33,6 +37,20 @@ export default function DashboardPage() {
         <KpiCard label="Obras registradas" value={resumen ? resumen.obrasRegistradas.toLocaleString("es-DO") : "—"} />
         <KpiCard label="Gastos del mes" value={resumen ? fmtMoney.format(resumen.gastosDelMes) : "—"} />
       </div>
+
+      {alertas.length > 0 && (
+        <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-5">
+          <h2 className="mb-3 text-sm font-semibold text-amber-800">⚠ Alertas de estancamiento de metas</h2>
+          <ul className="space-y-2">
+            {alertas.map((a) => (
+              <li key={a.id} className="text-sm">
+                <span className="font-semibold text-amber-900">{a.titulo}</span>
+                <span className="ml-2 text-amber-700">{a.cuerpo}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <h2 className="mb-3 text-sm font-semibold text-gray-700">Actividades recientes</h2>

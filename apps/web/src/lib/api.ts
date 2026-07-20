@@ -41,6 +41,26 @@ async function tryRefresh(): Promise<string | null> {
   return data.accessToken as string;
 }
 
+export async function uploadFile(file: File): Promise<{ url: string }> {
+  const { accessToken } = getTokens();
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${API_URL}/uploads`, {
+    method: "POST",
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new ApiError(res.status, body.error ?? "No se pudo subir el archivo");
+  }
+  return res.json();
+}
+
+export function resolveFileUrl(url: string): string {
+  return url.startsWith("http") ? url : `${API_URL}${url}`;
+}
+
 export async function apiFetch<T = unknown>(
   path: string,
   options: RequestInit = {},

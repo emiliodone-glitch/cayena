@@ -43,20 +43,20 @@ enum TipoMovimiento {
 // ---------------------------------------------------------------------------
 
 model Provincia {
-  id      String @id // slug, coincide con properties.id del GeoJSON
-  codigo  String @unique // ISO 3166-2:DO, ej. DO-25
-  nombre  String
+  id     String @id // slug, coincide con properties.id del GeoJSON
+  codigo String @unique // ISO 3166-2:DO, ej. DO-25
+  nombre String
 
-  municipios   Municipio[]
-  militantes   Militante[]
-  obras        Obra[]
-  metas        MetaMilitantes[]
+  municipios Municipio[]
+  militantes Militante[]
+  obras      Obra[]
+  metas      MetaMilitantes[]
 
   createdAt DateTime @default(now())
 }
 
 model Municipio {
-  id          String @id // slug compuesto `${provinciaId}__${municipioSlug}`
+  id          String    @id // slug compuesto `${provinciaId}__${municipioSlug}`
   nombre      String
   provinciaId String
   provincia   Provincia @relation(fields: [provinciaId], references: [id])
@@ -75,13 +75,13 @@ model Municipio {
 // ---------------------------------------------------------------------------
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
+  id           String  @id @default(cuid())
+  email        String  @unique
   passwordHash String
   nombre       String
   telefono     String?
-  role         Role     @default(MILITANTE)
-  active       Boolean  @default(true)
+  role         Role    @default(MILITANTE)
+  active       Boolean @default(true)
 
   // Alcance del promotor/jefe de secretaría
   secretariaId String?
@@ -90,11 +90,11 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  actividadesCreadas Actividad[]      @relation("ActividadCreador")
-  obrasCreadas       Obra[]           @relation("ObraCreador")
-  militantesCaptados Militante[]      @relation("MilitanteCapturador")
-  gastosRegistrados  Gasto[]          @relation("GastoRegistrador")
-  avancesRegistrados AvancePOA[]      @relation("AvanceRegistrador")
+  actividadesCreadas Actividad[]    @relation("ActividadCreador")
+  obrasCreadas       Obra[]         @relation("ObraCreador")
+  militantesCaptados Militante[]    @relation("MilitanteCapturador")
+  gastosRegistrados  Gasto[]        @relation("GastoRegistrador")
+  avancesRegistrados AvancePOA[]    @relation("AvanceRegistrador")
   refreshTokens      RefreshToken[]
 }
 
@@ -125,13 +125,13 @@ model Secretaria {
 }
 
 model DocumentoSecretaria {
-  id           String   @id @default(cuid())
+  id           String     @id @default(cuid())
   secretariaId String
   secretaria   Secretaria @relation(fields: [secretariaId], references: [id])
   titulo       String
   url          String
   subidoPorId  String?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime   @default(now())
 
   @@index([secretariaId])
 }
@@ -141,17 +141,17 @@ model DocumentoSecretaria {
 // ---------------------------------------------------------------------------
 
 model Actividad {
-  id             String   @id @default(cuid())
-  titulo         String
-  descripcion    String?
-  fecha          DateTime
-  ubicacion      String?
-  lat            Float?
-  lng            Float?
-  fotos          String[]
-  secretariaId   String
-  secretaria     Secretaria @relation(fields: [secretariaId], references: [id])
-  publicadaApp   Boolean  @default(false)
+  id           String     @id @default(cuid())
+  titulo       String
+  descripcion  String?
+  fecha        DateTime
+  ubicacion    String?
+  lat          Float?
+  lng          Float?
+  fotos        String[]
+  secretariaId String
+  secretaria   Secretaria @relation(fields: [secretariaId], references: [id])
+  publicadaApp Boolean    @default(false)
 
   creadoPorId String
   creadoPor   User   @relation("ActividadCreador", fields: [creadoPorId], references: [id])
@@ -168,13 +168,13 @@ model Actividad {
 // ---------------------------------------------------------------------------
 
 model Obra {
-  id          String        @id @default(cuid())
-  titulo      String
-  resena      String
-  categoria   CategoriaObra
-  fotos       String[]
-  lat         Float
-  lng         Float
+  id        String        @id @default(cuid())
+  titulo    String
+  resena    String
+  categoria CategoriaObra
+  fotos     String[]
+  lat       Float
+  lng       Float
 
   provinciaId String
   provincia   Provincia @relation(fields: [provinciaId], references: [id])
@@ -223,6 +223,10 @@ model Militante {
   capturadoPor   User?   @relation("MilitanteCapturador", fields: [capturadoPorId], references: [id])
   origen         String  @default("BACKOFFICE") // BACKOFFICE | APP_PUBLICA
 
+  // Gamificación (Fase 2)
+  puntos    Int                 @default(0)
+  insignias MilitanteInsignia[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -243,7 +247,7 @@ model MetaMilitantes {
   municipio   Municipio? @relation(fields: [municipioId], references: [id])
 
   meta          Int
-  vigenciaDesde DateTime @default(now())
+  vigenciaDesde DateTime  @default(now())
   vigenciaHasta DateTime?
 
   createdAt DateTime @default(now())
@@ -282,7 +286,7 @@ model Gasto {
 // ---------------------------------------------------------------------------
 
 model MetaPOA {
-  id                String   @id @default(cuid())
+  id                String     @id @default(cuid())
   secretariaId      String
   secretaria        Secretaria @relation(fields: [secretariaId], references: [id])
   nombre            String
@@ -297,10 +301,96 @@ model MetaPOA {
   @@index([secretariaId])
 }
 
+// ---------------------------------------------------------------------------
+// Notificaciones push (RF-27)
+// ---------------------------------------------------------------------------
+
+model DeviceToken {
+  id         String   @id @default(cuid())
+  token      String   @unique
+  plataforma String   @default("expo")
+  createdAt  DateTime @default(now())
+}
+
+model Notificacion {
+  id            String   @id @default(cuid())
+  titulo        String
+  cuerpo        String
+  tipo          String // OBRA | ACTIVIDAD | CONVOCATORIA | ALERTA_META
+  enviadaAt     DateTime @default(now())
+  destinatarios Int      @default(0)
+}
+
+// ---------------------------------------------------------------------------
+// Encuestas internas (Fase 2)
+// ---------------------------------------------------------------------------
+
+model Encuesta {
+  id          String   @id @default(cuid())
+  titulo      String
+  descripcion String?
+  activa      Boolean  @default(true)
+  creadoPorId String
+  createdAt   DateTime @default(now())
+
+  opciones EncuestaOpcion[]
+  votos    EncuestaVoto[]
+}
+
+model EncuestaOpcion {
+  id         String   @id @default(cuid())
+  encuestaId String
+  encuesta   Encuesta @relation(fields: [encuestaId], references: [id], onDelete: Cascade)
+  texto      String
+
+  votos EncuestaVoto[]
+
+  @@index([encuestaId])
+}
+
+model EncuestaVoto {
+  id            String         @id @default(cuid())
+  encuestaId    String
+  encuesta      Encuesta       @relation(fields: [encuestaId], references: [id], onDelete: Cascade)
+  opcionId      String
+  opcion        EncuestaOpcion @relation(fields: [opcionId], references: [id], onDelete: Cascade)
+  cedulaVotante String
+  createdAt     DateTime       @default(now())
+
+  @@unique([encuestaId, cedulaVotante])
+  @@index([opcionId])
+}
+
+// ---------------------------------------------------------------------------
+// Gamificación (Fase 2)
+// ---------------------------------------------------------------------------
+
+model InsigniaDefinicion {
+  id          String  @id @default(cuid())
+  codigo      String  @unique
+  nombre      String
+  descripcion String?
+  puntos      Int     @default(0)
+
+  otorgadas MilitanteInsignia[]
+}
+
+model MilitanteInsignia {
+  id          String             @id @default(cuid())
+  militanteId String
+  militante   Militante          @relation(fields: [militanteId], references: [id], onDelete: Cascade)
+  insigniaId  String
+  insignia    InsigniaDefinicion @relation(fields: [insigniaId], references: [id])
+  otorgadaAt  DateTime           @default(now())
+
+  @@unique([militanteId, insigniaId])
+  @@index([militanteId])
+}
+
 model AvancePOA {
-  id        String  @id @default(cuid())
+  id        String   @id @default(cuid())
   metaPoaId String
-  metaPoa   MetaPOA @relation(fields: [metaPoaId], references: [id], onDelete: Cascade)
+  metaPoa   MetaPOA  @relation(fields: [metaPoaId], references: [id], onDelete: Cascade)
   valor     Float
   fecha     DateTime @default(now())
   nota      String?

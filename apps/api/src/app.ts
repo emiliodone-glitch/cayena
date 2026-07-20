@@ -10,6 +10,11 @@ import { gastosRouter } from "./routes/gastos.routes";
 import { poaRouter } from "./routes/poa.routes";
 import { usuariosRouter } from "./routes/usuarios.routes";
 import { dashboardRouter } from "./routes/dashboard.routes";
+import { uploadsRouter } from "./routes/uploads.routes";
+import { notificacionesRouter } from "./routes/notificaciones.routes";
+import { encuestasRouter } from "./routes/encuestas.routes";
+import { transparenciaRouter } from "./routes/transparencia.routes";
+import { UPLOADS_DIR } from "./lib/storage";
 import { errorHandler } from "./middleware/errorHandler";
 
 export function createApp() {
@@ -21,6 +26,7 @@ export function createApp() {
     }),
   );
   app.use(express.json({ limit: "10mb" }));
+  app.use("/files", express.static(UPLOADS_DIR));
 
   app.get("/health", (_req, res) => res.json({ ok: true }));
 
@@ -34,6 +40,10 @@ export function createApp() {
   app.use("/poa", poaRouter);
   app.use("/usuarios", usuariosRouter);
   app.use("/dashboard", dashboardRouter);
+  app.use("/uploads", uploadsRouter);
+  app.use("/notificaciones", notificacionesRouter);
+  app.use("/encuestas", encuestasRouter);
+  app.use("/transparencia", transparenciaRouter);
 
   app.use(errorHandler);
 

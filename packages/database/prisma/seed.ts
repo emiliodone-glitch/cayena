@@ -164,10 +164,25 @@ async function seedMetasYDemo() {
   console.log("Actividad demo sembrada.");
 }
 
+async function seedInsignias() {
+  await prisma.insigniaDefinicion.upsert({
+    where: { codigo: "BIENVENIDA" },
+    update: {},
+    create: {
+      codigo: "BIENVENIDA",
+      nombre: "Bienvenida",
+      descripcion: "Te uniste a Fuerza del Pueblo",
+      puntos: 10,
+    },
+  });
+  console.log("Insignias sembradas.");
+}
+
 async function main() {
   await seedGeografia();
   await seedSecretarias();
   await seedSuperadmin();
+  await seedInsignias();
   await seedMetasYDemo();
 }
 

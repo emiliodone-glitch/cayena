@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import QRCode from "react-native-qrcode-svg";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "@/api/auth";
 import { apiFetch, ApiError } from "@/api/client";
+import { MI_MILITANTE_ID_KEY, MI_MILITANTE_NOMBRE_KEY } from "@/lib/carnet";
 
 type Dirigente = {
   id: string;
@@ -17,9 +20,15 @@ export default function PerfilScreen() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [dirigentes, setDirigentes] = useState<Dirigente[]>([]);
+  const [carnet, setCarnet] = useState<{ id: string; nombre: string } | null>(null);
 
   useEffect(() => {
     apiFetch<Dirigente[]>("/usuarios/directorio", {}, false).then(setDirigentes);
+    Promise.all([AsyncStorage.getItem(MI_MILITANTE_ID_KEY), AsyncStorage.getItem(MI_MILITANTE_NOMBRE_KEY)]).then(
+      ([id, nombre]) => {
+        if (id && nombre) setCarnet({ id, nombre });
+      },
+    );
   }, []);
 
   async function handleLogin() {
@@ -76,6 +85,17 @@ export default function PerfilScreen() {
             </View>
           )}
 
+          {carnet && (
+            <View style={styles.carnetCard}>
+              <Text style={styles.tituloLogin}>Carnet digital</Text>
+              <View style={styles.qrBox}>
+                <QRCode value={carnet.id} size={140} color="#123f1c" backgroundColor="white" />
+              </View>
+              <Text style={styles.nombre}>{carnet.nombre}</Text>
+              <Text style={styles.rol}>Militante · ID-{carnet.id.slice(-6).toUpperCase()}</Text>
+            </View>
+          )}
+
           <Text style={styles.seccion}>Directorio de dirigentes</Text>
         </View>
       }
@@ -108,6 +128,14 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   avatarTexto: { color: "white", fontSize: 22, fontWeight: "700" },
+  carnetCard: {
+    marginTop: 16,
+    backgroundColor: "#f9fafb",
+    borderRadius: 14,
+    padding: 20,
+    alignItems: "center",
+  },
+  qrBox: { padding: 12, backgroundColor: "white", borderRadius: 12, marginBottom: 10 },
   nombre: { fontSize: 17, fontWeight: "700", color: "#123f1c" },
   rol: { fontSize: 12, color: "#6b7280", marginTop: 2 },
   tituloLogin: { fontSize: 15, fontWeight: "700", color: "#123f1c", marginBottom: 12, alignSelf: "flex-start" },

@@ -3,6 +3,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
+import { FotoUploader } from "@/components/FotoUploader";
 
 type Lista = { id: string; nombre: string }[];
 
@@ -32,6 +33,7 @@ export default function NuevaObraPage() {
     lng: "-69.9312",
     publicada: false,
   });
+  const [fotos, setFotos] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -55,7 +57,7 @@ export default function NuevaObraPage() {
           ...form,
           lat: Number(form.lat),
           lng: Number(form.lng),
-          fotos: [],
+          fotos,
         }),
       });
       router.push("/obras");
@@ -127,6 +129,10 @@ export default function NuevaObraPage() {
             <input required className="input" value={form.lng} onChange={(e) => setForm({ ...form, lng: e.target.value })} />
           </label>
         </div>
+        <label className="block">
+          <span className="mb-1 block text-sm font-medium text-gray-700">Fotos</span>
+          <FotoUploader fotos={fotos} onChange={setFotos} />
+        </label>
         <label className="flex items-center gap-2 text-sm text-gray-700">
           <input
             type="checkbox"

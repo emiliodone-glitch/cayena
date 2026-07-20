@@ -3,6 +3,7 @@ import { prisma } from "@cayena/database";
 import { calcularEstadoAvance, calcularPorcentaje } from "@cayena/shared";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { asyncRoute } from "../middleware/errorHandler";
+import { verificarEstancamientoMetas } from "../lib/alertas";
 
 export const dashboardRouter = Router();
 
@@ -43,6 +44,33 @@ dashboardRouter.get(
   requireAuth,
   asyncRoute(async (_req, res) => {
     res.json(await resumenGeneral());
+  }),
+);
+
+// Fase 2 — alertas de estancamiento de metas: listado para el dashboard.
+dashboardRouter.get(
+  "/alertas",
+  requireAuth,
+  requireRole("SUPERADMIN", "JEFE_SECRETARIA"),
+  asyncRoute(async (_req, res) => {
+    const alertas = await prisma.notificacion.findMany({
+      where: { tipo: "ALERTA_META" },
+      orderBy: { enviadaAt: "desc" },
+      take: 20,
+    });
+    res.json(alertas);
+  }),
+);
+
+// Disparo manual (además del chequeo automático diario) por si un superadmin
+// quiere forzar la verificación de estancamiento sin esperar al ciclo.
+dashboardRouter.post(
+  "/alertas/verificar",
+  requireAuth,
+  requireRole("SUPERADMIN"),
+  asyncRoute(async (_req, res) => {
+    const generadas = await verificarEstancamientoMetas();
+    res.json({ generadas });
   }),
 );
 
