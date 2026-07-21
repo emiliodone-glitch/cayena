@@ -101,7 +101,11 @@ export default function MilitantesPage() {
         <DistritosMunicipales />
       ) : (
         <>
-          <MapaMilitantes />
+          <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+            <div className="mx-auto max-w-[1100px]">
+              <MapaMilitantes compacto aspecto="aspect-[1000/850]" />
+            </div>
+          </div>
 
           <div className="mt-8">
             <div className="mb-3 flex items-center justify-between">
