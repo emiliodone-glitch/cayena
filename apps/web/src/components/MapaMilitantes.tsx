@@ -135,7 +135,7 @@ export function MapaMilitantes({ compacto = false, alto }: { compacto?: boolean;
         <MapContainer
           center={[18.89, -70.16]}
           zoom={8}
-          zoomSnap={0.25}
+          zoomSnap={0.001}
           zoomDelta={0.25}
           ref={mapRef}
           style={{ height: "100%", width: "100%" }}

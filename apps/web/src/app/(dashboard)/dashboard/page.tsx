@@ -32,7 +32,7 @@ import { COLOR_ESTADO, type EstadoAvance } from "@cayena/shared";
 
 const MapaMilitantes = dynamic(
   () => import("@/components/MapaMilitantes").then((m) => m.MapaMilitantes),
-  { ssr: false, loading: () => <div className="h-[560px] animate-pulse rounded-xl bg-gray-100" /> },
+  { ssr: false, loading: () => <div className="mx-auto h-[850px] max-w-[1000px] animate-pulse rounded-xl bg-gray-100" /> },
 );
 
 type Fila = { id: string; nombre: string; militantesCaptados: number; meta: number; porcentaje: number; estado: EstadoAvance };
@@ -268,7 +268,9 @@ export default function DashboardPage() {
 
       <div className="mb-6">
         <h2 className="mb-3 text-sm font-semibold text-gray-700">Mapa de avance nacional</h2>
-        <MapaMilitantes compacto alto="h-[560px]" />
+        <div className="mx-auto max-w-[1000px]">
+          <MapaMilitantes compacto alto="h-[850px]" />
+        </div>
       </div>
 
       {alertas.length > 0 && (
