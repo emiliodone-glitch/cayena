@@ -11,6 +11,9 @@ import {
   TrendingDown,
   Plus,
   RefreshCw,
+  ChevronDown,
+  ChevronUp,
+  Bell,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -32,7 +35,7 @@ import { COLOR_ESTADO, type EstadoAvance } from "@cayena/shared";
 
 const MapaMilitantes = dynamic(
   () => import("@/components/MapaMilitantes").then((m) => m.MapaMilitantes),
-  { ssr: false, loading: () => <div className="mx-auto h-[850px] max-w-[1000px] animate-pulse rounded-xl bg-gray-100" /> },
+  { ssr: false, loading: () => <div className="mx-auto aspect-[1000/850] max-w-[720px] animate-pulse rounded-xl bg-gray-100" /> },
 );
 
 type Fila = { id: string; nombre: string; militantesCaptados: number; meta: number; porcentaje: number; estado: EstadoAvance };
@@ -66,6 +69,22 @@ type Alerta = { id: string; titulo: string; cuerpo: string; enviadaAt: string };
 
 const fmtMoney = new Intl.NumberFormat("es-DO", { style: "currency", currency: "DOP", maximumFractionDigits: 0 });
 
+// Con tantos widgets apilados en una sola página larga, esta navegación por
+// anclas evita que haya que hacer scroll a ciegas para llegar a una sección.
+const SECCIONES = [
+  { id: "kpis", label: "Resumen" },
+  { id: "alertas", label: "Alertas" },
+  { id: "mapa", label: "Mapa" },
+  { id: "captacion", label: "Captación" },
+  { id: "topbottom", label: "Provincias" },
+  { id: "promotores", label: "Promotores" },
+  { id: "actividades", label: "Actividades" },
+];
+
+function irASeccion(id: string) {
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 function Tendencia({ valor, invertido = false }: { valor: number | null; invertido?: boolean }) {
   if (valor === null) return null;
   const positivo = invertido ? valor <= 0 : valor >= 0;
@@ -88,15 +107,18 @@ export default function DashboardPage() {
   const toast = useToast();
   const [resumen, setResumen] = useState<Resumen | null>(null);
   const [alertas, setAlertas] = useState<Alerta[]>([]);
+  const [alertasExpandidas, setAlertasExpandidas] = useState(false);
   const [rango, setRango] = useState<RangoPeriodo>({ periodo: "mes" });
   const [ultimaActualizacion, setUltimaActualizacion] = useState<Date | null>(null);
   const [segundosTranscurridos, setSegundosTranscurridos] = useState(0);
+  const [refrescando, setRefrescando] = useState(false);
 
   const [drawerObra, setDrawerObra] = useState(false);
   const [drawerActividad, setDrawerActividad] = useState(false);
   const [drawerMilitante, setDrawerMilitante] = useState(false);
 
   const cargar = useCallback(() => {
+    setRefrescando(true);
     const params = new URLSearchParams({ periodo: rango.periodo });
     if (rango.periodo === "custom" && rango.desde && rango.hasta) {
       params.set("desde", rango.desde);
@@ -107,7 +129,8 @@ export default function DashboardPage() {
         setResumen(data);
         setUltimaActualizacion(new Date());
       })
-      .catch(() => setResumen(null));
+      .catch(() => setResumen(null))
+      .finally(() => setRefrescando(false));
   }, [rango]);
 
   useEffect(() => {
@@ -115,12 +138,13 @@ export default function DashboardPage() {
     apiFetch<Alerta[]>("/dashboard/alertas").then(setAlertas).catch(() => setAlertas([]));
   }, [cargar]);
 
-  // Auto-refresh cada 60s + reloj de "hace X segundos".
+  // Auto-refresh cada 60s + reloj de "hace X" (se actualiza cada 5s: no hace
+  // falta granularidad de 1s y evita un re-render por segundo sin necesidad).
   useEffect(() => {
     const refresco = setInterval(cargar, 60_000);
     const reloj = setInterval(() => {
-      setSegundosTranscurridos((s) => s + 1);
-    }, 1000);
+      setSegundosTranscurridos((s) => s + 5);
+    }, 5000);
     return () => {
       clearInterval(refresco);
       clearInterval(reloj);
@@ -148,8 +172,12 @@ export default function DashboardPage() {
         <Saludo nombre={user?.nombre} />
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1 text-xs text-gray-400">
-            <RefreshCw className="h-3 w-3" />
-            {ultimaActualizacion ? `Actualizado ${segundosATexto(segundosTranscurridos)}` : "Cargando…"}
+            <RefreshCw className={`h-3 w-3 ${refrescando ? "animate-spin text-institucional-600" : ""}`} />
+            {refrescando
+              ? "Actualizando…"
+              : ultimaActualizacion
+                ? `Actualizado ${segundosATexto(segundosTranscurridos)}`
+                : "Cargando…"}
           </span>
           <PeriodoSelector value={rango} onChange={setRango} />
         </div>
@@ -177,6 +205,18 @@ export default function DashboardPage() {
           </button>
         </div>
       )}
+
+      <nav className="mb-6 flex gap-1 overflow-x-auto rounded-lg border border-gray-200 bg-white p-1 text-sm">
+        {SECCIONES.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => irASeccion(s.id)}
+            className="whitespace-nowrap rounded-md px-3 py-1.5 text-gray-500 hover:bg-gray-100 hover:text-institucional-700"
+          >
+            {s.label}
+          </button>
+        ))}
+      </nav>
 
       {vistaSecretaria && (
         <div className="mb-8">
@@ -216,7 +256,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <h2 className="mb-3 text-sm font-semibold text-gray-700">
+      <h2 id="kpis" className="mb-3 scroll-mt-4 text-sm font-semibold text-gray-700">
         {vistaSecretaria ? "Contexto nacional" : "Resumen nacional"}
       </h2>
       <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -241,6 +281,15 @@ export default function DashboardPage() {
               <Target className="mb-1 h-4 w-4 text-gray-300" />
               <div className="text-2xl font-bold text-institucional-900">{resumen.porcentajeNacional}%</div>
               <div className="mt-1 text-sm text-gray-500">Meta nacional</div>
+              <div className="mt-2 h-1.5 w-full rounded-full bg-gray-100">
+                <div
+                  className="h-1.5 rounded-full"
+                  style={{
+                    width: `${Math.min(100, resumen.porcentajeNacional)}%`,
+                    background: COLOR_ESTADO[resumen.estadoNacional],
+                  }}
+                />
+              </div>
               {resumen.proyeccionMeses !== null && (
                 <div className="mt-1 text-[11px] text-gray-400">
                   {resumen.proyeccionMeses === 0
@@ -266,28 +315,49 @@ export default function DashboardPage() {
         )}
       </div>
 
-      <div className="mb-6">
-        <h2 className="mb-3 text-sm font-semibold text-gray-700">Mapa de avance nacional</h2>
-        <div className="mx-auto max-w-[1000px]">
-          <MapaMilitantes compacto alto="h-[850px]" />
-        </div>
-      </div>
-
       {alertas.length > 0 && (
-        <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-5">
-          <h2 className="mb-3 text-sm font-semibold text-amber-800">⚠ Alertas de estancamiento de metas</h2>
+        <div id="alertas" className="mb-6 scroll-mt-4 rounded-xl border border-amber-200 bg-amber-50 p-5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-amber-800">⚠ Alertas de estancamiento de metas</h2>
+            <span className="flex items-center gap-1 text-xs text-amber-700">
+              <Bell className="h-3 w-3" /> también en tus notificaciones
+            </span>
+          </div>
           <ul className="space-y-2">
-            {alertas.map((a) => (
+            {(alertasExpandidas ? alertas : alertas.slice(0, 4)).map((a) => (
               <li key={a.id} className="text-sm">
                 <span className="font-semibold text-amber-900">{a.titulo}</span>
                 <span className="ml-2 text-amber-700">{a.cuerpo}</span>
               </li>
             ))}
           </ul>
+          {alertas.length > 4 && (
+            <button
+              onClick={() => setAlertasExpandidas((v) => !v)}
+              className="mt-3 flex items-center gap-1 text-xs font-semibold text-amber-800 hover:text-amber-900"
+            >
+              {alertasExpandidas ? (
+                <>Ver menos <ChevronUp className="h-3 w-3" /></>
+              ) : (
+                <>Ver todas ({alertas.length}) <ChevronDown className="h-3 w-3" /></>
+              )}
+            </button>
+          )}
         </div>
       )}
 
-      <div className="mb-6 grid gap-6 lg:grid-cols-2">
+      <div id="mapa" className="mb-6 scroll-mt-4">
+        <h2 className="mb-1 text-sm font-semibold text-gray-700">Mapa de avance nacional</h2>
+        <p className="mb-3 text-xs text-gray-400">
+          Muestra el avance acumulado total hacia la meta de cada demarcación — a diferencia de las
+          KPIs y gráficas de abajo, no cambia según el período seleccionado arriba.
+        </p>
+        <div className="mx-auto max-w-[720px]">
+          <MapaMilitantes compacto aspecto="aspect-[1000/850]" />
+        </div>
+      </div>
+
+      <div id="captacion" className="mb-6 grid scroll-mt-4 gap-6 lg:grid-cols-2">
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
           <h3 className="mb-2 text-sm font-semibold text-gray-700">Captación en el período</h3>
           {resumen ? <SerieCaptacionChart serie={resumen.serieDiaria} /> : <div className="h-64 animate-pulse rounded-lg bg-gray-100" />}
@@ -305,7 +375,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="mb-6 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <div id="topbottom" className="mb-6 scroll-mt-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         {resumen ? (
           <TopBottomProvincias top={resumen.topProvincias} bottom={resumen.bottomProvincias} />
         ) : (
@@ -313,12 +383,12 @@ export default function DashboardPage() {
         )}
       </div>
 
-      <div className="mb-6 grid gap-6 lg:grid-cols-2">
+      <div id="promotores" className="mb-6 grid scroll-mt-4 gap-6 lg:grid-cols-2">
         <TopPromotores />
         <ObrasRecientes />
       </div>
 
-      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <div id="actividades" className="scroll-mt-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <h2 className="mb-3 text-sm font-semibold text-gray-700">Actividades recientes</h2>
         <ul className="divide-y divide-gray-100">
           {(vistaSecretaria?.actividadesRecientes ?? resumen?.actividadesRecientes ?? []).map((a) => (

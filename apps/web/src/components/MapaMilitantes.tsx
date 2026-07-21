@@ -20,7 +20,18 @@ type Propiedades = {
 
 type PanelInfo = Propiedades | null;
 
-export function MapaMilitantes({ compacto = false, alto }: { compacto?: boolean; alto?: string }) {
+export function MapaMilitantes({
+  compacto = false,
+  alto,
+  aspecto,
+}: {
+  compacto?: boolean;
+  /** Clase Tailwind de altura fija (ej. "h-[520px]"). Ignorada si se pasa `aspecto`. */
+  alto?: string;
+  /** Clase Tailwind de aspect-ratio (ej. "aspect-[1000/850]") para que el mapa escale
+   * de forma responsiva con el ancho del contenedor en vez de usar una altura fija. */
+  aspecto?: string;
+}) {
   const [nivel, setNivel] = useState<"nacional" | "municipios">("nacional");
   const [provinciaSeleccionada, setProvinciaSeleccionada] = useState<{ id: string; nombre: string } | null>(
     null,
@@ -51,14 +62,8 @@ export function MapaMilitantes({ compacto = false, alto }: { compacto?: boolean;
 
   useEffect(() => {
     if (!geo) return;
-    // Encuadrar dentro del evento "add" de la capa (el enfoque anterior)
-    // aplica fitBounds contra un estado interno de Leaflet (origen de
-    // píxeles) que en un mapa montado dinámicamente (ssr:false) todavía no
-    // se ha asentado: el zoom calculado resulta correcto pero el renderer
-    // SVG queda con una transformación desincronizada y el territorio se ve
-    // recortado. Esperar un frame via requestAnimationFrame, ya con la capa
-    // montada (ref del <GeoJSON>), evita el problema de raíz.
-    const raf = requestAnimationFrame(() => {
+
+    function encuadrar() {
       const map = mapRef.current;
       const layer = geoLayerRef.current;
       if (!map || !layer) return;
@@ -70,8 +75,26 @@ export function MapaMilitantes({ compacto = false, alto }: { compacto?: boolean;
       // el territorio: fitBounds siempre calcula el zoom máximo que
       // garantiza que los límites quepan enteros dentro del padding.
       map.fitBounds(bounds, { padding: [2, 2], animate: false });
-    });
-    return () => cancelAnimationFrame(raf);
+    }
+
+    // Encuadrar dentro del evento "add" de la capa (el enfoque anterior)
+    // aplica fitBounds contra un estado interno de Leaflet (origen de
+    // píxeles) que en un mapa montado dinámicamente (ssr:false) todavía no
+    // se ha asentado: el zoom calculado resulta correcto pero el renderer
+    // SVG queda con una transformación desincronizada y el territorio se ve
+    // recortado. Esperar un frame via requestAnimationFrame, ya con la capa
+    // montada (ref del <GeoJSON>), evita el problema de raíz.
+    const raf = requestAnimationFrame(encuadrar);
+    // Con `aspecto` el contenedor escala de forma responsiva con el ancho
+    // de la pantalla: aunque la proporción se mantenga, el zoom "ajustado"
+    // depende del tamaño absoluto en píxeles, así que hay que recalcularlo
+    // en cada resize (si no, un contenedor más chico podría recortar el
+    // territorio en vez de solo dejar menos margen).
+    window.addEventListener("resize", encuadrar);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", encuadrar);
+    };
   }, [geo]);
 
   function estiloFeature(feature?: Feature) {
@@ -131,7 +154,9 @@ export function MapaMilitantes({ compacto = false, alto }: { compacto?: boolean;
         )}
       </div>
 
-      <div className={`${alto ?? (compacto ? "h-[380px]" : "h-[520px]")} overflow-hidden rounded-xl border border-gray-200`}>
+      <div
+        className={`${aspecto ? `w-full ${aspecto}` : alto ?? (compacto ? "h-[380px]" : "h-[520px]")} overflow-hidden rounded-xl border border-gray-200`}
+      >
         <MapContainer
           center={[18.89, -70.16]}
           zoom={8}
