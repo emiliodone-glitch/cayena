@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "@cayena/database";
 import { calcularEstadoAvance, calcularPorcentaje } from "@cayena/shared";
 import { asyncRoute } from "../middleware/errorHandler";
+import { obtenerAvancePorProvincia } from "../lib/geoStats";
 
 export const transparenciaRouter = Router();
 
@@ -47,27 +48,6 @@ transparenciaRouter.get(
 transparenciaRouter.get(
   "/provincias",
   asyncRoute(async (_req, res) => {
-    const provincias = await prisma.provincia.findMany({ select: { id: true, nombre: true } });
-    const [conteos, metas] = await Promise.all([
-      prisma.militante.groupBy({ by: ["provinciaId"], _count: { _all: true } }),
-      prisma.metaMilitantes.findMany({ where: { provinciaId: { not: null }, vigenciaHasta: null } }),
-    ]);
-    const conteoMap = new Map(conteos.map((c) => [c.provinciaId, c._count._all]));
-    const metaMap = new Map(metas.filter((m) => m.provinciaId).map((m) => [m.provinciaId as string, m.meta]));
-
-    res.json(
-      provincias.map((p) => {
-        const captados = conteoMap.get(p.id) ?? 0;
-        const meta = metaMap.get(p.id) ?? 0;
-        return {
-          id: p.id,
-          nombre: p.nombre,
-          militantesCaptados: captados,
-          meta,
-          porcentaje: calcularPorcentaje(captados, meta),
-          estado: calcularEstadoAvance(captados, meta),
-        };
-      }),
-    );
+    res.json(await obtenerAvancePorProvincia());
   }),
 );

@@ -1,9 +1,11 @@
 import { Router } from "express";
+import { z } from "zod";
 import { prisma } from "@cayena/database";
 import { calcularEstadoAvance, calcularPorcentaje } from "@cayena/shared";
 import { requireAuth, requireRole, type AuthUser } from "../middleware/auth";
 import { asyncRoute } from "../middleware/errorHandler";
 import { verificarEstancamientoMetas } from "../lib/alertas";
+import { obtenerAvancePorProvincia } from "../lib/geoStats";
 
 export const dashboardRouter = Router();
 
@@ -12,41 +14,142 @@ function variacionPorcentual(actual: number, anterior: number): number | null {
   return Math.round(((actual - anterior) / anterior) * 1000) / 10;
 }
 
-async function resumenGeneral(user: AuthUser) {
-  const inicioMes = new Date();
-  inicioMes.setDate(1);
-  inicioMes.setHours(0, 0, 0, 0);
-  const inicioMesAnterior = new Date(inicioMes);
-  inicioMesAnterior.setMonth(inicioMesAnterior.getMonth() - 1);
-  const finMesAnterior = new Date(inicioMes.getTime() - 1);
+type Periodo = "semana" | "mes" | "trimestre" | "custom";
+
+function calcularRango(periodo: Periodo, desdeParam?: string, hastaParam?: string) {
+  const ahora = new Date();
+
+  if (periodo === "custom" && desdeParam && hastaParam) {
+    const inicio = new Date(desdeParam);
+    inicio.setHours(0, 0, 0, 0);
+    const fin = new Date(hastaParam);
+    fin.setHours(23, 59, 59, 999);
+    const duracionMs = fin.getTime() - inicio.getTime();
+    const finAnterior = new Date(inicio.getTime() - 1);
+    const inicioAnterior = new Date(finAnterior.getTime() - duracionMs);
+    return { inicio, fin, inicioAnterior, finAnterior };
+  }
+
+  if (periodo === "semana") {
+    const inicio = new Date(ahora);
+    inicio.setDate(inicio.getDate() - 6);
+    inicio.setHours(0, 0, 0, 0);
+    const fin = new Date(ahora);
+    fin.setHours(23, 59, 59, 999);
+    const inicioAnterior = new Date(inicio);
+    inicioAnterior.setDate(inicioAnterior.getDate() - 7);
+    const finAnterior = new Date(inicio.getTime() - 1);
+    return { inicio, fin, inicioAnterior, finAnterior };
+  }
+
+  if (periodo === "trimestre") {
+    const inicio = new Date(ahora.getFullYear(), ahora.getMonth() - 2, 1);
+    const fin = new Date(ahora);
+    fin.setHours(23, 59, 59, 999);
+    const inicioAnterior = new Date(inicio);
+    inicioAnterior.setMonth(inicioAnterior.getMonth() - 3);
+    const finAnterior = new Date(inicio.getTime() - 1);
+    return { inicio, fin, inicioAnterior, finAnterior };
+  }
+
+  // mes (default)
+  const inicio = new Date(ahora.getFullYear(), ahora.getMonth(), 1);
+  const fin = new Date(ahora);
+  fin.setHours(23, 59, 59, 999);
+  const inicioAnterior = new Date(inicio);
+  inicioAnterior.setMonth(inicioAnterior.getMonth() - 1);
+  const finAnterior = new Date(inicio.getTime() - 1);
+  return { inicio, fin, inicioAnterior, finAnterior };
+}
+
+function serieCompleta(inicio: Date, fin: Date, filas: { dia: Date; total: bigint }[]) {
+  const porDia = new Map(filas.map((f) => [f.dia.toISOString().slice(0, 10), Number(f.total)]));
+  const dias: { fecha: string; total: number }[] = [];
+  const cursor = new Date(inicio);
+  cursor.setHours(0, 0, 0, 0);
+  const finDia = new Date(fin);
+  finDia.setHours(0, 0, 0, 0);
+  // Límite defensivo: nunca más de 120 puntos aunque el rango custom sea largo.
+  let iteraciones = 0;
+  while (cursor.getTime() <= finDia.getTime() && iteraciones < 120) {
+    const clave = cursor.toISOString().slice(0, 10);
+    dias.push({ fecha: clave, total: porDia.get(clave) ?? 0 });
+    cursor.setDate(cursor.getDate() + 1);
+    iteraciones++;
+  }
+  return dias;
+}
+
+async function resumenGeneral(
+  user: AuthUser,
+  periodo: Periodo,
+  desdeParam?: string,
+  hastaParam?: string,
+) {
+  const { inicio, fin, inicioAnterior, finAnterior } = calcularRango(periodo, desdeParam, hastaParam);
 
   const [
     militantesTotales,
     obrasRegistradas,
-    gastosDelMesAgg,
-    gastosMesAnteriorAgg,
+    gastosPeriodoAgg,
+    gastosPeriodoAnteriorAgg,
     metasNacionales,
     actividadesRecientes,
-    militantesEsteMes,
-    militantesMesAnterior,
+    militantesPeriodo,
+    militantesPeriodoAnterior,
+    serieDiariaRaw,
+    gastosPorCategoriaRaw,
+    avancePorProvincia,
   ] = await Promise.all([
     prisma.militante.count(),
     prisma.obra.count(),
-    prisma.gasto.aggregate({ where: { tipo: "GASTO", fecha: { gte: inicioMes } }, _sum: { monto: true } }),
+    prisma.gasto.aggregate({ where: { tipo: "GASTO", fecha: { gte: inicio, lte: fin } }, _sum: { monto: true } }),
     prisma.gasto.aggregate({
-      where: { tipo: "GASTO", fecha: { gte: inicioMesAnterior, lte: finMesAnterior } },
+      where: { tipo: "GASTO", fecha: { gte: inicioAnterior, lte: finAnterior } },
       _sum: { monto: true },
     }),
     prisma.metaMilitantes.findMany({ where: { provinciaId: { not: null }, vigenciaHasta: null } }),
     prisma.actividad.findMany({ orderBy: { fecha: "desc" }, take: 5 }),
-    prisma.militante.count({ where: { createdAt: { gte: inicioMes } } }),
-    prisma.militante.count({ where: { createdAt: { gte: inicioMesAnterior, lte: finMesAnterior } } }),
+    prisma.militante.count({ where: { createdAt: { gte: inicio, lte: fin } } }),
+    prisma.militante.count({ where: { createdAt: { gte: inicioAnterior, lte: finAnterior } } }),
+    prisma.$queryRaw<{ dia: Date; total: bigint }[]>`
+      SELECT date_trunc('day', "createdAt") as dia, COUNT(*) as total
+      FROM "Militante"
+      WHERE "createdAt" >= ${inicio} AND "createdAt" <= ${fin}
+      GROUP BY dia
+      ORDER BY dia ASC
+    `,
+    prisma.gasto.groupBy({
+      by: ["categoria"],
+      where: { tipo: "GASTO", fecha: { gte: inicio, lte: fin } },
+      _sum: { monto: true },
+    }),
+    obtenerAvancePorProvincia(),
   ]);
 
   const metaNacional = metasNacionales.reduce((sum, m) => sum + m.meta, 0);
   const porcentajeNacional = calcularPorcentaje(militantesTotales, metaNacional);
-  const gastosDelMes = Number(gastosDelMesAgg._sum.monto ?? 0);
-  const gastosMesAnterior = Number(gastosMesAnteriorAgg._sum.monto ?? 0);
+  const gastosPeriodo = Number(gastosPeriodoAgg._sum.monto ?? 0);
+  const gastosPeriodoAnterior = Number(gastosPeriodoAnteriorAgg._sum.monto ?? 0);
+
+  const diasEnPeriodo = Math.max(1, Math.round((fin.getTime() - inicio.getTime()) / 86_400_000) + 1);
+  const ritmoDiario = militantesPeriodo / diasEnPeriodo;
+  const ritmoMensual = ritmoDiario * 30;
+  const faltantes = metaNacional - militantesTotales;
+  const proyeccionMeses =
+    faltantes <= 0 ? 0 : ritmoMensual > 0 ? Math.round((faltantes / ritmoMensual) * 10) / 10 : null;
+
+  const provinciasOrdenadas = [...avancePorProvincia]
+    .filter((p) => p.meta > 0)
+    .sort((a, b) => b.porcentaje - a.porcentaje);
+
+  const conteoEstados = avancePorProvincia.reduce(
+    (acc, p) => {
+      acc[p.estado]++;
+      return acc;
+    },
+    { rojo: 0, amarillo: 0, verde: 0 },
+  );
 
   const base = {
     militantesTotales,
@@ -54,10 +157,20 @@ async function resumenGeneral(user: AuthUser) {
     porcentajeNacional,
     estadoNacional: calcularEstadoAvance(militantesTotales, metaNacional),
     obrasRegistradas,
-    gastosDelMes,
+    gastosPeriodo,
     actividadesRecientes,
-    tendenciaMilitantes: variacionPorcentual(militantesEsteMes, militantesMesAnterior),
-    tendenciaGastos: variacionPorcentual(gastosDelMes, gastosMesAnterior),
+    tendenciaMilitantes: variacionPorcentual(militantesPeriodo, militantesPeriodoAnterior),
+    tendenciaGastos: variacionPorcentual(gastosPeriodo, gastosPeriodoAnterior),
+    proyeccionMeses,
+    periodo: { tipo: periodo, desde: inicio.toISOString(), hasta: fin.toISOString() },
+    serieDiaria: serieCompleta(inicio, fin, serieDiariaRaw),
+    gastosPorCategoria: gastosPorCategoriaRaw.map((g) => ({
+      categoria: g.categoria,
+      total: Number(g._sum.monto ?? 0),
+    })),
+    provinciasPorEstado: conteoEstados,
+    topProvincias: provinciasOrdenadas.slice(0, 5),
+    bottomProvincias: [...provinciasOrdenadas].reverse().slice(0, 5),
   };
 
   // Fase 2 — dashboard enfocado en su propia secretaría para jefe/promotor.
@@ -70,7 +183,7 @@ async function resumenGeneral(user: AuthUser) {
         take: 5,
       }),
       prisma.gasto.aggregate({
-        where: { secretariaId: user.secretariaId, tipo: "GASTO", fecha: { gte: inicioMes } },
+        where: { secretariaId: user.secretariaId, tipo: "GASTO", fecha: { gte: inicio, lte: fin } },
         _sum: { monto: true },
       }),
       prisma.metaPOA.findMany({
@@ -103,12 +216,19 @@ async function resumenGeneral(user: AuthUser) {
   return { ...base, vistaSecretaria: null };
 }
 
+const periodoSchema = z.object({
+  periodo: z.enum(["semana", "mes", "trimestre", "custom"]).default("mes"),
+  desde: z.string().optional(),
+  hasta: z.string().optional(),
+});
+
 // RF-22: dashboard ejecutivo (back office)
 dashboardRouter.get(
   "/resumen",
   requireAuth,
   asyncRoute(async (req, res) => {
-    res.json(await resumenGeneral(req.user!));
+    const { periodo, desde, hasta } = periodoSchema.parse(req.query);
+    res.json(await resumenGeneral(req.user!, periodo, desde, hasta));
   }),
 );
 
@@ -145,7 +265,7 @@ dashboardRouter.get(
   requireAuth,
   requireRole("DIRIGENCIA", "SUPERADMIN"),
   asyncRoute(async (req, res) => {
-    const resumen = await resumenGeneral(req.user!);
+    const resumen = await resumenGeneral(req.user!, "mes");
     const avancePorProvincia = await prisma.provincia.findMany({
       select: { id: true, nombre: true },
     });
