@@ -13,6 +13,8 @@ import {
   Wallet,
   PieChart,
   Users,
+  ClipboardList,
+  Megaphone,
   LogOut,
   X,
 } from "lucide-react";
@@ -27,6 +29,8 @@ const NAV = [
   { href: "/ranking", label: "Ranking", icon: Trophy, roles: ["SUPERADMIN", "JEFE_SECRETARIA", "AUDITOR"] },
   { href: "/gastos", label: "Gastos", icon: Wallet, roles: null },
   { href: "/poa", label: "POA / Metas", icon: PieChart, roles: null },
+  { href: "/encuestas", label: "Encuestas", icon: ClipboardList, roles: ["SUPERADMIN", "JEFE_SECRETARIA"] },
+  { href: "/convocatorias", label: "Convocatorias", icon: Megaphone, roles: ["SUPERADMIN", "JEFE_SECRETARIA"] },
   { href: "/usuarios", label: "Usuarios", icon: Users, roles: ["SUPERADMIN"] },
 ] as const;
 

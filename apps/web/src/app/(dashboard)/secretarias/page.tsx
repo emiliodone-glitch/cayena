@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import Link from "next/link";
 import { Pencil, Plus } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -81,10 +82,18 @@ export default function SecretariasPage() {
         {secretarias === null &&
           Array.from({ length: 6 }).map((_, i) => <CardSkeleton key={i} />)}
         {secretarias?.map((s) => (
-          <div key={s.id} className="relative rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <Link
+            key={s.id}
+            href={`/secretarias/${s.id}`}
+            className="relative block rounded-xl border border-gray-200 bg-white p-5 shadow-sm hover:border-institucional-300 hover:shadow-md"
+          >
             {user?.role === "SUPERADMIN" && (
               <button
-                onClick={() => abrirEditar(s)}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  abrirEditar(s);
+                }}
                 className="absolute right-3 top-3 rounded-lg p-1.5 text-gray-300 hover:bg-gray-100 hover:text-institucional-700"
               >
                 <Pencil className="h-4 w-4" />
@@ -92,7 +101,8 @@ export default function SecretariasPage() {
             )}
             <div className="font-semibold text-institucional-900">{s.nombre}</div>
             <div className="mt-1 text-sm text-gray-500">{s.descripcion ?? "Sin descripción"}</div>
-          </div>
+            <div className="mt-3 text-xs font-medium text-institucional-600">Ver historial y documentos →</div>
+          </Link>
         ))}
       </div>
 

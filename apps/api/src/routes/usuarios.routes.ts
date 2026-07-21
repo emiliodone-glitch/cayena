@@ -4,6 +4,7 @@ import { z } from "zod";
 import { Role, prisma } from "@cayena/database";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { asyncRoute } from "../middleware/errorHandler";
+import { calcularRango, type Periodo } from "../lib/periodo";
 
 export const usuariosRouter = Router();
 
@@ -30,17 +31,27 @@ usuariosRouter.use(requireAuth);
 
 // Fase 2 — ranking interno de promotores/digitadores: quién ha captado más
 // militantes, para generar competencia sana entre el equipo de campo.
+const rankingQuerySchema = z.object({
+  periodo: z.enum(["semana", "mes", "trimestre", "todo", "custom"]).optional(),
+  desde: z.string().optional(),
+  hasta: z.string().optional(),
+});
+
 usuariosRouter.get(
   "/ranking-captacion",
   requireRole("SUPERADMIN", "JEFE_SECRETARIA", "AUDITOR"),
   asyncRoute(async (req, res) => {
     const scopedSecretariaId = req.user!.role === "JEFE_SECRETARIA" ? req.user!.secretariaId ?? undefined : undefined;
+    const { periodo, desde, hasta } = rankingQuerySchema.parse(req.query);
+    const rangoFecha =
+      periodo && periodo !== "todo" ? calcularRango(periodo as Periodo, desde, hasta) : null;
 
     const conteos = await prisma.militante.groupBy({
       by: ["capturadoPorId"],
       where: {
         capturadoPorId: { not: null },
         ...(scopedSecretariaId ? { capturadoPor: { secretariaId: scopedSecretariaId } } : {}),
+        ...(rangoFecha ? { createdAt: { gte: rangoFecha.inicio, lte: rangoFecha.fin } } : {}),
       },
       _count: { _all: true },
       orderBy: { _count: { capturadoPorId: "desc" } },

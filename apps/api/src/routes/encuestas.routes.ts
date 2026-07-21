@@ -113,3 +113,13 @@ encuestasRouter.patch(
     res.json(encuesta);
   }),
 );
+
+encuestasRouter.delete(
+  "/:id",
+  requireRole("SUPERADMIN"),
+  asyncRoute(async (req, res) => {
+    // EncuestaOpcion y EncuestaVoto tienen onDelete: Cascade.
+    await prisma.encuesta.delete({ where: { id: req.params.id } });
+    res.status(204).send();
+  }),
+);

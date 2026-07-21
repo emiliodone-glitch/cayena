@@ -23,6 +23,7 @@ export default function ActividadesPage() {
   const toast = useToast();
   const [vista, setVista] = useState<"lista" | "calendario">("lista");
   const [actividades, setActividades] = useState<Actividad[] | null>(null);
+  const [q, setQ] = useState("");
   const [mesActual, setMesActual] = useState(() => new Date());
   const [diaSeleccionado, setDiaSeleccionado] = useState<Date | null>(null);
   const [drawerAbierto, setDrawerAbierto] = useState(false);
@@ -47,9 +48,11 @@ export default function ActividadesPage() {
     return dias;
   }, [mesActual]);
 
-  const actividadesVisibles = diaSeleccionado
-    ? (actividades ?? []).filter((a) => sameDay(new Date(a.fecha), diaSeleccionado))
-    : actividades ?? [];
+  const actividadesVisibles = (
+    diaSeleccionado
+      ? (actividades ?? []).filter((a) => sameDay(new Date(a.fecha), diaSeleccionado))
+      : actividades ?? []
+  ).filter((a) => a.titulo.toLowerCase().includes(q.trim().toLowerCase()));
 
   function abrirNueva() {
     setEditando(undefined);
@@ -96,7 +99,13 @@ export default function ActividadesPage() {
     <div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-bold text-institucional-900">Actividades</h1>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Buscar por título…"
+            className="w-56 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-institucional-600 focus:outline-none"
+          />
           <div className="flex rounded-lg border border-gray-200 bg-white p-1 text-sm">
             <button
               onClick={() => setVista("lista")}

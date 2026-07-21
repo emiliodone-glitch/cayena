@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { Plus, Trash2 } from "lucide-react";
-import { apiFetch } from "@/lib/api";
+import { Plus, Pencil, Trash2 } from "lucide-react";
+import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/components/Toast";
 import { Drawer } from "@/components/Drawer";
@@ -15,52 +15,107 @@ type Gasto = {
   monto: string;
   categoria: string;
   fecha: string;
+  secretariaId: string | null;
   secretaria: { nombre: string } | null;
 };
 
 type Secretaria = { id: string; nombre: string };
 
+const CATEGORIAS = ["Alquiler", "Publicidad", "Transporte", "Salarios", "Actividades", "Suministros", "Donaciones", "Otro"];
+
 const fmtMoney = new Intl.NumberFormat("es-DO", { style: "currency", currency: "DOP" });
+
+const FORM_VACIO = { tipo: "GASTO", monto: "", categoria: "", categoriaOtra: "", fecha: "", secretariaId: "" };
 
 export default function GastosPage() {
   const { user } = useAuth();
   const toast = useToast();
+  const puedeEditar = user?.role !== "AUDITOR";
+
   const [data, setData] = useState<{ gastos: Gasto[]; totales: { ingresos: number; gastos: number } } | null>(null);
   const [secretarias, setSecretarias] = useState<Secretaria[]>([]);
+  const [filtroSecretaria, setFiltroSecretaria] = useState("");
+  const [desde, setDesde] = useState("");
+  const [hasta, setHasta] = useState("");
+
   const [drawerAbierto, setDrawerAbierto] = useState(false);
+  const [editando, setEditando] = useState<Gasto | null>(null);
+  const [form, setForm] = useState(FORM_VACIO);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [eliminando, setEliminando] = useState<Gasto | null>(null);
   const [borrando, setBorrando] = useState(false);
-  const [form, setForm] = useState({
-    tipo: "GASTO",
-    monto: "",
-    categoria: "",
-    fecha: "",
-    secretariaId: "",
-  });
 
   function cargar() {
-    apiFetch<NonNullable<typeof data>>("/gastos").then(setData);
+    const params = new URLSearchParams();
+    if (filtroSecretaria) params.set("secretariaId", filtroSecretaria);
+    if (desde) params.set("desde", desde);
+    if (hasta) params.set("hasta", hasta);
+    apiFetch<NonNullable<typeof data>>(`/gastos?${params.toString()}`).then(setData).catch(() => setData(null));
   }
 
   useEffect(() => {
     cargar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtroSecretaria, desde, hasta]);
+
+  useEffect(() => {
     apiFetch<Secretaria[]>("/secretarias").then(setSecretarias);
   }, []);
 
-  async function crear(e: FormEvent) {
-    e.preventDefault();
-    await apiFetch("/gastos", {
-      method: "POST",
-      body: JSON.stringify({
-        ...form,
-        monto: Number(form.monto),
-        secretariaId: form.secretariaId || undefined,
-      }),
+  function abrirNuevo() {
+    setEditando(null);
+    setForm(FORM_VACIO);
+    setError(null);
+    setDrawerAbierto(true);
+  }
+
+  function abrirEditar(g: Gasto) {
+    setEditando(g);
+    const esCategoriaConocida = CATEGORIAS.slice(0, -1).includes(g.categoria);
+    setForm({
+      tipo: g.tipo,
+      monto: g.monto,
+      categoria: esCategoriaConocida ? g.categoria : "Otro",
+      categoriaOtra: esCategoriaConocida ? "" : g.categoria,
+      fecha: g.fecha.slice(0, 10),
+      secretariaId: g.secretariaId ?? "",
     });
-    toast("Movimiento registrado");
-    setForm({ tipo: "GASTO", monto: "", categoria: "", fecha: "", secretariaId: "" });
-    setDrawerAbierto(false);
-    cargar();
+    setError(null);
+    setDrawerAbierto(true);
+  }
+
+  async function guardar(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    const categoriaFinal = form.categoria === "Otro" ? form.categoriaOtra.trim() : form.categoria;
+    if (!categoriaFinal) {
+      setError("Indica una categoría");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const body = {
+        tipo: form.tipo,
+        monto: Number(form.monto),
+        categoria: categoriaFinal,
+        fecha: form.fecha,
+        secretariaId: form.secretariaId || undefined,
+      };
+      if (editando) {
+        await apiFetch(`/gastos/${editando.id}`, { method: "PATCH", body: JSON.stringify(body) });
+        toast("Movimiento actualizado");
+      } else {
+        await apiFetch("/gastos", { method: "POST", body: JSON.stringify(body) });
+        toast("Movimiento registrado");
+      }
+      setDrawerAbierto(false);
+      cargar();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "No se pudo guardar el movimiento");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   async function confirmarEliminar() {
@@ -80,14 +135,43 @@ export default function GastosPage() {
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-bold text-institucional-900">Finanzas</h1>
-        {user?.role !== "AUDITOR" && (
+        {puedeEditar && (
           <button
-            onClick={() => setDrawerAbierto(true)}
+            onClick={abrirNuevo}
             className="flex items-center gap-1.5 rounded-lg bg-institucional-600 px-4 py-2 text-sm font-semibold text-white hover:bg-institucional-700"
           >
             <Plus className="h-4 w-4" /> Nuevo movimiento
+          </button>
+        )}
+      </div>
+
+      <div className="mb-6 flex flex-wrap gap-3">
+        <select
+          value={filtroSecretaria}
+          onChange={(e) => setFiltroSecretaria(e.target.value)}
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
+        >
+          <option value="">Todas las secretarías</option>
+          {secretarias.map((s) => (
+            <option key={s.id} value={s.id}>{s.nombre}</option>
+          ))}
+        </select>
+        <label className="flex items-center gap-2 text-sm text-gray-600">
+          Desde
+          <input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} className="rounded-lg border border-gray-300 px-2 py-1 text-sm" />
+        </label>
+        <label className="flex items-center gap-2 text-sm text-gray-600">
+          Hasta
+          <input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} className="rounded-lg border border-gray-300 px-2 py-1 text-sm" />
+        </label>
+        {(filtroSecretaria || desde || hasta) && (
+          <button
+            onClick={() => { setFiltroSecretaria(""); setDesde(""); setHasta(""); }}
+            className="text-xs font-medium text-gray-400 hover:text-gray-600"
+          >
+            Limpiar filtros
           </button>
         )}
       </div>
@@ -120,7 +204,7 @@ export default function GastosPage() {
       </div>
 
       {data === null ? (
-        <TableSkeleton cols={5} />
+        <TableSkeleton cols={6} />
       ) : (
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
           <table className="w-full text-left text-sm">
@@ -131,7 +215,7 @@ export default function GastosPage() {
                 <th className="px-4 py-2">Monto</th>
                 <th className="px-4 py-2">Fecha</th>
                 <th className="px-4 py-2">Secretaría</th>
-                {user?.role === "SUPERADMIN" && <th className="px-4 py-2 text-right">Acciones</th>}
+                {puedeEditar && <th className="px-4 py-2 text-right">Acciones</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -144,14 +228,24 @@ export default function GastosPage() {
                   <td className="px-4 py-2">{fmtMoney.format(Number(g.monto))}</td>
                   <td className="px-4 py-2">{new Date(g.fecha).toLocaleDateString("es-DO")}</td>
                   <td className="px-4 py-2">{g.secretaria?.nombre ?? "General"}</td>
-                  {user?.role === "SUPERADMIN" && (
+                  {puedeEditar && (
                     <td className="px-4 py-2 text-right">
-                      <button
-                        onClick={() => setEliminando(g)}
-                        className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      <div className="flex justify-end gap-1">
+                        <button
+                          onClick={() => abrirEditar(g)}
+                          className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-institucional-700"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                        {user?.role === "SUPERADMIN" && (
+                          <button
+                            onClick={() => setEliminando(g)}
+                            className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   )}
                 </tr>
@@ -166,8 +260,8 @@ export default function GastosPage() {
         </div>
       )}
 
-      <Drawer open={drawerAbierto} onClose={() => setDrawerAbierto(false)} title="Nuevo movimiento">
-        <form onSubmit={crear} className="space-y-3">
+      <Drawer open={drawerAbierto} onClose={() => setDrawerAbierto(false)} title={editando ? "Editar movimiento" : "Nuevo movimiento"}>
+        <form onSubmit={guardar} className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <select
               value={form.tipo}
@@ -187,13 +281,26 @@ export default function GastosPage() {
               className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
             />
           </div>
-          <input
+          <select
             required
-            placeholder="Categoría"
             value={form.categoria}
             onChange={(e) => setForm({ ...form, categoria: e.target.value })}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-          />
+          >
+            <option value="">Categoría…</option>
+            {CATEGORIAS.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          {form.categoria === "Otro" && (
+            <input
+              required
+              placeholder="Especifica la categoría"
+              value={form.categoriaOtra}
+              onChange={(e) => setForm({ ...form, categoriaOtra: e.target.value })}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+          )}
           <div className="grid grid-cols-2 gap-3">
             <input
               required
@@ -213,9 +320,13 @@ export default function GastosPage() {
               ))}
             </select>
           </div>
+          {error && <p className="text-sm text-red-600">{error}</p>}
           <div className="flex gap-2 pt-2">
-            <button className="flex-1 rounded-lg bg-institucional-600 px-4 py-2 text-sm font-semibold text-white hover:bg-institucional-700">
-              Registrar
+            <button
+              disabled={submitting}
+              className="flex-1 rounded-lg bg-institucional-600 px-4 py-2 text-sm font-semibold text-white hover:bg-institucional-700 disabled:opacity-60"
+            >
+              {submitting ? "Guardando…" : editando ? "Guardar cambios" : "Registrar"}
             </button>
             <button
               type="button"

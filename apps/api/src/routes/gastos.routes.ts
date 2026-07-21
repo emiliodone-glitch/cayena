@@ -79,6 +79,20 @@ gastosRouter.post(
   }),
 );
 
+gastosRouter.patch(
+  "/:id",
+  asyncRoute(async (req, res) => {
+    if (req.user!.role === "AUDITOR") throw new HttpError(403, "Auditor es de solo lectura");
+    const data = gastoSchema.partial().parse(req.body);
+    const gasto = await prisma.gasto.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (req.user!.role === "JEFE_SECRETARIA" && gasto.secretariaId && gasto.secretariaId !== req.user!.secretariaId) {
+      throw new HttpError(403, "No autorizado para editar este movimiento");
+    }
+    const actualizado = await prisma.gasto.update({ where: { id: req.params.id }, data });
+    res.json(actualizado);
+  }),
+);
+
 gastosRouter.delete(
   "/:id",
   requireRole("SUPERADMIN"),

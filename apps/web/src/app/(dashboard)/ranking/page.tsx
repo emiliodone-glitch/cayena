@@ -13,20 +13,62 @@ type Fila = {
   militantesCaptados: number;
 };
 
+type Periodo = "todo" | "semana" | "mes" | "trimestre" | "custom";
+
+const OPCIONES: { valor: Periodo; label: string }[] = [
+  { valor: "todo", label: "Todo el tiempo" },
+  { valor: "semana", label: "Semana" },
+  { valor: "mes", label: "Mes" },
+  { valor: "trimestre", label: "Trimestre" },
+  { valor: "custom", label: "Rango" },
+];
+
 const MEDALLA_COLOR = ["#facc15", "#94a3b8", "#c2703d"];
 
 export default function RankingPage() {
   const [ranking, setRanking] = useState<Fila[] | null>(null);
+  const [periodo, setPeriodo] = useState<Periodo>("todo");
+  const [desde, setDesde] = useState("");
+  const [hasta, setHasta] = useState("");
 
   useEffect(() => {
-    apiFetch<Fila[]>("/usuarios/ranking-captacion").then(setRanking).catch(() => setRanking([]));
-  }, []);
+    const params = new URLSearchParams({ periodo });
+    if (periodo === "custom" && desde && hasta) {
+      params.set("desde", desde);
+      params.set("hasta", hasta);
+    }
+    apiFetch<Fila[]>(`/usuarios/ranking-captacion?${params.toString()}`)
+      .then(setRanking)
+      .catch(() => setRanking([]));
+  }, [periodo, desde, hasta]);
 
   return (
     <div>
-      <div className="mb-2 flex items-center gap-2">
-        <Trophy className="h-6 w-6 text-institucional-600" />
-        <h1 className="text-xl font-bold text-institucional-900">Ranking de captación</h1>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Trophy className="h-6 w-6 text-institucional-600" />
+          <h1 className="text-xl font-bold text-institucional-900">Ranking de captación</h1>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex rounded-lg border border-gray-200 bg-white p-1 text-sm">
+            {OPCIONES.map((o) => (
+              <button
+                key={o.valor}
+                onClick={() => setPeriodo(o.valor)}
+                className={`rounded-md px-3 py-1 ${periodo === o.valor ? "bg-institucional-600 text-white" : "text-gray-500"}`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+          {periodo === "custom" && (
+            <div className="flex items-center gap-1.5">
+              <input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm" />
+              <span className="text-gray-400">–</span>
+              <input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm" />
+            </div>
+          )}
+        </div>
       </div>
       <p className="mb-6 text-sm text-gray-500">
         Promotores y jefes de secretaría con más militantes registrados desde el back office.
@@ -65,7 +107,7 @@ export default function RankingPage() {
               {ranking.length === 0 && (
                 <tr>
                   <td colSpan={4} className="px-4 py-6 text-center text-gray-400">
-                    Todavía no hay militantes registrados desde el back office.
+                    Todavía no hay militantes registrados en este período.
                   </td>
                 </tr>
               )}

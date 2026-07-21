@@ -41,6 +41,14 @@ secretariasRouter.patch(
   }),
 );
 
+secretariasRouter.get(
+  "/:id",
+  asyncRoute(async (req, res) => {
+    const secretaria = await prisma.secretaria.findUniqueOrThrow({ where: { id: req.params.id } });
+    res.json(secretaria);
+  }),
+);
+
 // RF-03: historial filtrable por fecha
 secretariasRouter.get(
   "/:id/historial",

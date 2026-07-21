@@ -71,3 +71,36 @@ poaRouter.post(
     res.status(201).json(avance);
   }),
 );
+
+const metaPoaUpdateSchema = metaPoaSchema.partial();
+
+poaRouter.patch(
+  "/:id",
+  asyncRoute(async (req, res) => {
+    if (req.user!.role === "AUDITOR") throw new HttpError(403, "Auditor es de solo lectura");
+    const data = metaPoaUpdateSchema.parse(req.body);
+    const metaPoa = await prisma.metaPOA.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (req.user!.role === "JEFE_SECRETARIA" && metaPoa.secretariaId !== req.user!.secretariaId) {
+      throw new HttpError(403, "No autorizado para esta secretaría");
+    }
+    if (req.user!.role === "JEFE_SECRETARIA" && data.secretariaId && data.secretariaId !== req.user!.secretariaId) {
+      throw new HttpError(403, "No autorizado para esta secretaría");
+    }
+    const actualizada = await prisma.metaPOA.update({ where: { id: req.params.id }, data });
+    res.json(actualizada);
+  }),
+);
+
+poaRouter.delete(
+  "/:id",
+  asyncRoute(async (req, res) => {
+    if (req.user!.role === "AUDITOR") throw new HttpError(403, "Auditor es de solo lectura");
+    const metaPoa = await prisma.metaPOA.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (req.user!.role === "JEFE_SECRETARIA" && metaPoa.secretariaId !== req.user!.secretariaId) {
+      throw new HttpError(403, "No autorizado para esta secretaría");
+    }
+    // AvancePOA tiene onDelete: Cascade, así que sus avances se eliminan junto con la meta.
+    await prisma.metaPOA.delete({ where: { id: req.params.id } });
+    res.status(204).send();
+  }),
+);

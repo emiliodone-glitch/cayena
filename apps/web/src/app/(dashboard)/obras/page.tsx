@@ -20,6 +20,7 @@ export default function ObrasPage() {
   const { user } = useAuth();
   const toast = useToast();
   const [obras, setObras] = useState<Obra[] | null>(null);
+  const [q, setQ] = useState("");
   const [drawerAbierto, setDrawerAbierto] = useState(false);
   const [editando, setEditando] = useState<Obra | undefined>(undefined);
   const [eliminando, setEliminando] = useState<Obra | null>(null);
@@ -61,20 +62,39 @@ export default function ObrasPage() {
     }
   }
 
+  async function togglePublicar(o: Obra) {
+    try {
+      await apiFetch(`/obras/${o.id}`, { method: "PATCH", body: JSON.stringify({ publicada: !o.publicada }) });
+      toast(o.publicada ? "Obra despublicada" : "Obra publicada en la app");
+      cargar();
+    } catch {
+      toast("No se pudo cambiar el estado de la obra", "error");
+    }
+  }
+
   const puedeEditar = user?.role !== "AUDITOR";
+  const obrasVisibles = obras?.filter((o) => o.titulo.toLowerCase().includes(q.trim().toLowerCase())) ?? [];
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-bold text-institucional-900">Obras de gobierno</h1>
-        {puedeEditar && (
-          <button
-            onClick={abrirNueva}
-            className="flex items-center gap-1.5 rounded-lg bg-institucional-600 px-4 py-2 text-sm font-semibold text-white hover:bg-institucional-700"
-          >
-            <Plus className="h-4 w-4" /> Nueva obra
-          </button>
-        )}
+        <div className="flex items-center gap-3">
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Buscar por título…"
+            className="w-64 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-institucional-600 focus:outline-none"
+          />
+          {puedeEditar && (
+            <button
+              onClick={abrirNueva}
+              className="flex items-center gap-1.5 rounded-lg bg-institucional-600 px-4 py-2 text-sm font-semibold text-white hover:bg-institucional-700"
+            >
+              <Plus className="h-4 w-4" /> Nueva obra
+            </button>
+          )}
+        </div>
       </div>
 
       {obras === null ? (
@@ -92,19 +112,21 @@ export default function ObrasPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {obras.map((o) => (
+              {obrasVisibles.map((o) => (
                 <tr key={o.id}>
                   <td className="px-4 py-2 font-medium">{o.titulo}</td>
                   <td className="px-4 py-2 capitalize">{o.categoria.toLowerCase().replace("_", " ")}</td>
                   <td className="px-4 py-2">{o.provincia.nombre} / {o.municipio.nombre}</td>
                   <td className="px-4 py-2">
-                    <span
+                    <button
+                      onClick={() => togglePublicar(o)}
+                      disabled={!puedeEditar}
                       className={`rounded-full px-3 py-1 text-xs font-semibold ${
                         o.publicada ? "bg-institucional-100 text-institucional-700" : "bg-gray-100 text-gray-500"
                       }`}
                     >
                       {o.publicada ? "Publicada" : "Borrador"}
-                    </span>
+                    </button>
                   </td>
                   {puedeEditar && (
                     <td className="px-4 py-2 text-right">
@@ -128,7 +150,7 @@ export default function ObrasPage() {
                   )}
                 </tr>
               ))}
-              {obras.length === 0 && (
+              {obrasVisibles.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-4 py-6 text-center text-gray-400">
                     Sin obras registradas.
