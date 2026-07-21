@@ -83,11 +83,12 @@ usuariosRouter.patch(
   "/:id",
   asyncRoute(async (req, res) => {
     const { password, ...data } = actualizarUsuarioSchema.parse(req.body);
+    const passwordHash = password ? await bcrypt.hash(password, 10) : undefined;
     const usuario = await prisma.user.update({
       where: { id: req.params.id },
       data: {
         ...data,
-        ...(password ? { passwordHash: await bcrypt.hash(password, 10) } : {}),
+        ...(passwordHash ? { passwordHash } : {}),
       },
     });
     const { passwordHash: _ph, ...rest } = usuario;
