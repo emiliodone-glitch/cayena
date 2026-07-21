@@ -105,13 +105,20 @@ export function MapaMilitantes({ compacto = false }: { compacto?: boolean }) {
         )}
       </div>
 
-      <div className={`${compacto ? "h-[300px]" : "h-[520px]"} overflow-hidden rounded-xl border border-gray-200`}>
+      <div className={`${compacto ? "h-[380px]" : "h-[520px]"} overflow-hidden rounded-xl border border-gray-200`}>
         <MapContainer
           center={[18.89, -70.16]}
           zoom={8}
           ref={mapRef}
           style={{ height: "100%", width: "100%" }}
           scrollWheelZoom={!compacto}
+          dragging={!compacto}
+          doubleClickZoom={!compacto}
+          touchZoom={!compacto}
+          boxZoom={!compacto}
+          keyboard={!compacto}
+          zoomControl={!compacto}
+          attributionControl={!compacto}
         >
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -127,7 +134,19 @@ export function MapaMilitantes({ compacto = false }: { compacto?: boolean }) {
                 add: (e) => {
                   const layer = e.target as L.GeoJSON;
                   const bounds = layer.getBounds();
-                  if (bounds.isValid()) mapRef.current?.fitBounds(bounds, { padding: [16, 16] });
+                  if (!bounds.isValid()) return;
+                  const map = mapRef.current;
+                  if (!map) return;
+                  map.fitBounds(bounds, { padding: [16, 16], animate: false });
+                  // En contenedores muy anchos y bajos (ej. el mapa compacto del
+                  // dashboard dentro de una grilla de 2 columnas), fitBounds
+                  // puede alejar demasiado el zoom para cubrir el ancho y termina
+                  // mostrando países vecinos. Forzamos un zoom mínimo razonable
+                  // centrado en el propio territorio.
+                  const zoomMinimo = compacto ? 7.6 : 6.8;
+                  if (map.getZoom() < zoomMinimo) {
+                    map.setView(bounds.getCenter(), zoomMinimo, { animate: false });
+                  }
                 },
               }}
             />
