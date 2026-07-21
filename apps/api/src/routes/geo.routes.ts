@@ -155,10 +155,16 @@ function sinArticulo(s: string): string {
 }
 
 // GET /geo/municipios/:municipioId/distritos-municipales — drill-down de tercer nivel.
-// El geojson solo trae nombre + geometría (sin id de base de datos: sería un cuid
-// fijo de un entorno específico y no tendría sentido en otro). Cada feature se
-// resuelve/crea aquí contra la tabla real DistritoMunicipal, igual que el resto
-// del catálogo geográfico gestionado desde el back office.
+// El geojson trae, por municipio, sus distritos municipales reales MÁS un
+// polígono "cabecera" (esCabecera: true) que cubre el resto del territorio del
+// municipio no repartido en ningún distrito — sin él, el mapa dejaría zonas
+// sin sombrear (el área urbana/central del municipio) al entrar a este nivel,
+// igual que pasaría con el mapa de provincias si faltara alguno de sus
+// municipios. La cabecera no tiene fila propia en DistritoMunicipal (sería un
+// distrito "de sí mismo"): sus estadísticas son los militantes del municipio
+// sin distrito municipal asignado. El resto de features sí se resuelven/crean
+// contra la tabla real DistritoMunicipal, igual que el resto del catálogo
+// geográfico gestionado desde el back office.
 geoRouter.get(
   "/municipios/:municipioId/distritos-municipales",
   asyncRoute(async (req, res) => {
@@ -176,6 +182,7 @@ geoRouter.get(
 
     const resueltos = await Promise.all(
       featuresMuni.map(async (f) => {
+        if (f.properties?.esCabecera) return { feature: f, distrito: null };
         const nombre = String(f.properties?.nombre ?? "");
         const exacto = porNombreExacto.get(normalizarDM(nombre));
         const suelto = porNombreSinArticulo.get(sinArticulo(normalizarDM(nombre)));
@@ -187,18 +194,34 @@ geoRouter.get(
       }),
     );
 
-    const distritoIds = resueltos.map((r) => r.distrito.id);
-    const [conteos, metas] = await Promise.all([
+    const distritoIds = resueltos.flatMap((r) => (r.distrito ? [r.distrito.id] : []));
+    const [conteos, metas, captadosCabecera] = await Promise.all([
       prisma.militante.groupBy({
         by: ["distritoMunicipalId"],
         where: { distritoMunicipalId: { in: distritoIds } },
         _count: { _all: true },
       }),
       metasActivasPorDistritoMunicipal(),
+      prisma.militante.count({ where: { municipioId, distritoMunicipalId: null } }),
     ]);
     const conteoMap = new Map(conteos.map((c) => [c.distritoMunicipalId, c._count._all]));
 
     const features = resueltos.map(({ feature, distrito }) => {
+      if (!distrito) {
+        // cabecera: militantes del municipio sin distrito municipal asignado
+        const captados = captadosCabecera;
+        return {
+          ...feature,
+          properties: {
+            ...feature.properties,
+            id: null,
+            militantesCaptados: captados,
+            meta: 0,
+            porcentaje: 0,
+            estado: calcularEstadoAvance(captados, 0),
+          },
+        };
+      }
       const captados = conteoMap.get(distrito.id) ?? 0;
       const meta = metas.get(distrito.id) ?? 0;
       return {
