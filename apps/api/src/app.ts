@@ -14,6 +14,7 @@ import { uploadsRouter } from "./routes/uploads.routes";
 import { notificacionesRouter } from "./routes/notificaciones.routes";
 import { encuestasRouter } from "./routes/encuestas.routes";
 import { transparenciaRouter } from "./routes/transparencia.routes";
+import { distritosRouter } from "./routes/distritos.routes";
 import { UPLOADS_DIR } from "./lib/storage";
 import { errorHandler } from "./middleware/errorHandler";
 
@@ -46,6 +47,7 @@ export function createApp() {
   app.use("/notificaciones", notificacionesRouter);
   app.use("/encuestas", encuestasRouter);
   app.use("/transparencia", transparenciaRouter);
+  app.use("/distritos", distritosRouter);
 
   app.use(errorHandler);
 

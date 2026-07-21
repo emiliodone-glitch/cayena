@@ -11,6 +11,7 @@ import { TableSkeleton } from "@/components/Skeleton";
 import { MilitanteForm } from "@/components/forms/MilitanteForm";
 import { MetasEditor } from "@/components/MetasEditor";
 import { ImportarMilitantesCSV } from "@/components/ImportarMilitantesCSV";
+import { DistritosMunicipales } from "@/components/DistritosMunicipales";
 
 const MapaMilitantes = dynamic(
   () => import("@/components/MapaMilitantes").then((m) => m.MapaMilitantes),
@@ -29,7 +30,7 @@ type MilitanteRow = {
 
 export default function MilitantesPage() {
   const { user } = useAuth();
-  const [tab, setTab] = useState<"mapa" | "metas">("mapa");
+  const [tab, setTab] = useState<"mapa" | "metas" | "distritos">("mapa");
   const [militantes, setMilitantes] = useState<MilitanteRow[] | null>(null);
   const [q, setQ] = useState("");
   const [drawerAbierto, setDrawerAbierto] = useState(false);
@@ -61,6 +62,12 @@ export default function MilitantesPage() {
               >
                 Definir metas
               </button>
+              <button
+                onClick={() => setTab("distritos")}
+                className={`rounded-md px-3 py-1 ${tab === "distritos" ? "bg-institucional-600 text-white" : "text-gray-500"}`}
+              >
+                Distritos municipales
+              </button>
             </div>
           )}
           <Link
@@ -90,6 +97,8 @@ export default function MilitantesPage() {
 
       {tab === "metas" ? (
         <MetasEditor />
+      ) : tab === "distritos" ? (
+        <DistritosMunicipales />
       ) : (
         <>
           <MapaMilitantes />

@@ -12,6 +12,7 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
   const toast = useToast();
   const [provincias, setProvincias] = useState<Lista>([]);
   const [municipios, setMunicipios] = useState<Lista>([]);
+  const [distritos, setDistritos] = useState<Lista>([]);
   const [form, setForm] = useState({
     nombre: "",
     cedula: "",
@@ -19,6 +20,7 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
     direccion: "",
     provinciaId: "",
     municipioId: "",
+    distritoMunicipalId: "",
     localidad: "",
     recintoElectoral: "",
   });
@@ -37,6 +39,16 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
     }
     apiFetch<Lista>(`/geo/lista/municipios?provinciaId=${form.provinciaId}`).then(setMunicipios);
   }, [form.provinciaId]);
+
+  useEffect(() => {
+    if (!form.municipioId) {
+      setDistritos([]);
+      return;
+    }
+    apiFetch<{ id: string; nombre: string }[]>(`/distritos?municipioId=${form.municipioId}`)
+      .then((filas) => setDistritos(filas.map((f) => ({ id: f.id, nombre: f.nombre }))))
+      .catch(() => setDistritos([]));
+  }, [form.municipioId]);
 
   // RF-15: detectar posibles duplicados mientras se escribe cédula/teléfono.
   useEffect(() => {
@@ -62,7 +74,11 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
     try {
       await apiFetch("/militantes", {
         method: "POST",
-        body: JSON.stringify({ ...form, consentimientoDatos: true }),
+        body: JSON.stringify({
+          ...form,
+          distritoMunicipalId: form.distritoMunicipalId || undefined,
+          consentimientoDatos: true,
+        }),
       });
       toast("Militante registrado");
       onSaved();
@@ -108,7 +124,7 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
             required
             className="input"
             value={form.provinciaId}
-            onChange={(e) => setForm({ ...form, provinciaId: e.target.value, municipioId: "" })}
+            onChange={(e) => setForm({ ...form, provinciaId: e.target.value, municipioId: "", distritoMunicipalId: "" })}
           >
             <option value="">Seleccionar…</option>
             {provincias.map((p) => (
@@ -122,7 +138,7 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
             className="input"
             value={form.municipioId}
             disabled={!form.provinciaId}
-            onChange={(e) => setForm({ ...form, municipioId: e.target.value })}
+            onChange={(e) => setForm({ ...form, municipioId: e.target.value, distritoMunicipalId: "" })}
           >
             <option value="">Seleccionar…</option>
             {municipios.map((m) => (
@@ -131,6 +147,20 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
           </select>
         </Field>
       </div>
+      {distritos.length > 0 && (
+        <Field label="Distrito municipal (opcional)">
+          <select
+            className="input"
+            value={form.distritoMunicipalId}
+            onChange={(e) => setForm({ ...form, distritoMunicipalId: e.target.value })}
+          >
+            <option value="">Sin distrito municipal / no aplica</option>
+            {distritos.map((d) => (
+              <option key={d.id} value={d.id}>{d.nombre}</option>
+            ))}
+          </select>
+        </Field>
+      )}
       <div className="grid grid-cols-2 gap-4">
         <Field label="Localidad">
           <input className="input" value={form.localidad} onChange={(e) => setForm({ ...form, localidad: e.target.value })} />

@@ -61,13 +61,33 @@ model Municipio {
   provinciaId String
   provincia   Provincia @relation(fields: [provinciaId], references: [id])
 
-  militantes Militante[]
-  obras      Obra[]
-  metas      MetaMilitantes[]
+  militantes           Militante[]
+  obras                Obra[]
+  metas                MetaMilitantes[]
+  distritosMunicipales DistritoMunicipal[]
 
   createdAt DateTime @default(now())
 
   @@index([provinciaId])
+}
+
+// Subdivisión de un municipio (RF-13.4). No existe geometría real disponible
+// para este nivel en las fuentes GeoJSON usadas (geoBoundaries no publica
+// ADM3 para RD), así que se gestiona como lista/tabla editable desde el back
+// office en vez de una capa más en el mapa.
+model DistritoMunicipal {
+  id          String    @id @default(cuid())
+  nombre      String
+  municipioId String
+  municipio   Municipio @relation(fields: [municipioId], references: [id])
+
+  militantes Militante[]
+  metas      MetaMilitantes[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([municipioId, nombre])
+  @@index([municipioId])
 }
 
 // ---------------------------------------------------------------------------
@@ -205,12 +225,14 @@ model Militante {
   telefono  String?
   direccion String?
 
-  provinciaId      String
-  provincia        Provincia @relation(fields: [provinciaId], references: [id])
-  municipioId      String
-  municipio        Municipio @relation(fields: [municipioId], references: [id])
-  localidad        String?
-  recintoElectoral String?
+  provinciaId         String
+  provincia           Provincia          @relation(fields: [provinciaId], references: [id])
+  municipioId         String
+  municipio           Municipio          @relation(fields: [municipioId], references: [id])
+  distritoMunicipalId String?
+  distritoMunicipal   DistritoMunicipal? @relation(fields: [distritoMunicipalId], references: [id])
+  localidad           String?
+  recintoElectoral    String?
 
   lat Float?
   lng Float?
@@ -232,19 +254,22 @@ model Militante {
 
   @@index([provinciaId])
   @@index([municipioId])
+  @@index([distritoMunicipalId])
   @@index([cedula])
   @@index([telefono])
 }
 
-// Meta de militantes vigente por demarcación (provincia o municipio).
+// Meta de militantes vigente por demarcación (provincia, municipio o distrito municipal).
 // Editable/modificable cada cierto tiempo (RF-12): se guarda historial,
 // la meta "activa" es la de vigenciaFin nula o mayor a la fecha actual.
 model MetaMilitantes {
-  id          String     @id @default(cuid())
-  provinciaId String?
-  provincia   Provincia? @relation(fields: [provinciaId], references: [id])
-  municipioId String?
-  municipio   Municipio? @relation(fields: [municipioId], references: [id])
+  id                  String             @id @default(cuid())
+  provinciaId         String?
+  provincia           Provincia?         @relation(fields: [provinciaId], references: [id])
+  municipioId         String?
+  municipio           Municipio?         @relation(fields: [municipioId], references: [id])
+  distritoMunicipalId String?
+  distritoMunicipal   DistritoMunicipal? @relation(fields: [distritoMunicipalId], references: [id])
 
   meta          Int
   vigenciaDesde DateTime  @default(now())
@@ -254,6 +279,7 @@ model MetaMilitantes {
 
   @@index([provinciaId])
   @@index([municipioId])
+  @@index([distritoMunicipalId])
 }
 
 // ---------------------------------------------------------------------------

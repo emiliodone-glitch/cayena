@@ -161,6 +161,7 @@ const militanteSchema = z.object({
   direccion: z.string().optional(),
   provinciaId: z.string(),
   municipioId: z.string(),
+  distritoMunicipalId: z.string().optional(),
   localidad: z.string().optional(),
   recintoElectoral: z.string().optional(),
   lat: z.number().optional(),
@@ -308,15 +309,16 @@ militantesRouter.get(
   }),
 );
 
-// RF-12: definir meta de militantes por provincia y municipio
+// RF-12: definir meta de militantes por provincia, municipio o distrito municipal
 const metaSchema = z
   .object({
     provinciaId: z.string().optional(),
     municipioId: z.string().optional(),
+    distritoMunicipalId: z.string().optional(),
     meta: z.number().int().nonnegative(),
   })
-  .refine((v) => !!v.provinciaId !== !!v.municipioId, {
-    message: "Debe especificar provinciaId o municipioId, no ambos",
+  .refine((v) => [v.provinciaId, v.municipioId, v.distritoMunicipalId].filter(Boolean).length === 1, {
+    message: "Debe especificar exactamente uno de provinciaId, municipioId o distritoMunicipalId",
   });
 
 militantesRouter.post(
@@ -329,6 +331,7 @@ militantesRouter.post(
       where: {
         provinciaId: data.provinciaId ?? null,
         municipioId: data.municipioId ?? null,
+        distritoMunicipalId: data.distritoMunicipalId ?? null,
         vigenciaHasta: null,
       },
       data: { vigenciaHasta: new Date() },
