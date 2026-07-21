@@ -35,7 +35,7 @@ import { COLOR_ESTADO, type EstadoAvance } from "@cayena/shared";
 
 const MapaMilitantes = dynamic(
   () => import("@/components/MapaMilitantes").then((m) => m.MapaMilitantes),
-  { ssr: false, loading: () => <div className="mx-auto aspect-[1000/850] max-w-[720px] animate-pulse rounded-xl bg-gray-100" /> },
+  { ssr: false, loading: () => <div className="mx-auto aspect-[1000/850] max-w-[1100px] animate-pulse rounded-xl bg-gray-100" /> },
 );
 
 type Fila = { id: string; nombre: string; militantesCaptados: number; meta: number; porcentaje: number; estado: EstadoAvance };
@@ -315,6 +315,27 @@ export default function DashboardPage() {
         )}
       </div>
 
+      <div id="mapa" className="mb-6 scroll-mt-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-gray-700">Mapa de avance nacional</h2>
+          {resumen && (
+            <span
+              className="rounded-full px-3 py-1 text-xs font-semibold text-white"
+              style={{ background: COLOR_ESTADO[resumen.estadoNacional] }}
+            >
+              {resumen.porcentajeNacional}% de la meta nacional
+            </span>
+          )}
+        </div>
+        <p className="mb-3 text-xs text-gray-400">
+          Muestra el avance acumulado total hacia la meta de cada demarcación — a diferencia de las
+          KPIs y gráficas de abajo, no cambia según el período seleccionado arriba.
+        </p>
+        <div className="mx-auto max-w-[1100px]">
+          <MapaMilitantes compacto aspecto="aspect-[1000/850]" />
+        </div>
+      </div>
+
       {alertas.length > 0 && (
         <div id="alertas" className="mb-6 scroll-mt-4 rounded-xl border border-amber-200 bg-amber-50 p-5">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -345,17 +366,6 @@ export default function DashboardPage() {
           )}
         </div>
       )}
-
-      <div id="mapa" className="mb-6 scroll-mt-4">
-        <h2 className="mb-1 text-sm font-semibold text-gray-700">Mapa de avance nacional</h2>
-        <p className="mb-3 text-xs text-gray-400">
-          Muestra el avance acumulado total hacia la meta de cada demarcación — a diferencia de las
-          KPIs y gráficas de abajo, no cambia según el período seleccionado arriba.
-        </p>
-        <div className="mx-auto max-w-[720px]">
-          <MapaMilitantes compacto aspecto="aspect-[1000/850]" />
-        </div>
-      </div>
 
       <div id="captacion" className="mb-6 grid scroll-mt-4 gap-6 lg:grid-cols-2">
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
