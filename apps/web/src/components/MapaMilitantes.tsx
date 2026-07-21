@@ -29,6 +29,7 @@ export function MapaMilitantes({ compacto = false, alto }: { compacto?: boolean;
   const [panel, setPanel] = useState<PanelInfo>(null);
   const [loading, setLoading] = useState(true);
   const mapRef = useRef<LeafletMap | null>(null);
+  const geoLayerRef = useRef<L.GeoJSON | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -47,6 +48,31 @@ export function MapaMilitantes({ compacto = false, alto }: { compacto?: boolean;
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nivel, provinciaSeleccionada?.id]);
+
+  useEffect(() => {
+    if (!geo) return;
+    // Encuadrar dentro del evento "add" de la capa (el enfoque anterior)
+    // aplica fitBounds contra un estado interno de Leaflet (origen de
+    // píxeles) que en un mapa montado dinámicamente (ssr:false) todavía no
+    // se ha asentado: el zoom calculado resulta correcto pero el renderer
+    // SVG queda con una transformación desincronizada y el territorio se ve
+    // recortado. Esperar un frame via requestAnimationFrame, ya con la capa
+    // montada (ref del <GeoJSON>), evita el problema de raíz.
+    const raf = requestAnimationFrame(() => {
+      const map = mapRef.current;
+      const layer = geoLayerRef.current;
+      if (!map || !layer) return;
+      const bounds = layer.getBounds();
+      if (!bounds.isValid()) return;
+      map.invalidateSize();
+      // zoomSnap fino (ver prop del MapContainer) permite que fitBounds
+      // elija un zoom fraccional ajustado al contenedor sin nunca recortar
+      // el territorio: fitBounds siempre calcula el zoom máximo que
+      // garantiza que los límites quepan enteros dentro del padding.
+      map.fitBounds(bounds, { padding: [2, 2], animate: false });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [geo]);
 
   function estiloFeature(feature?: Feature) {
     const estado = (feature?.properties as Propiedades | undefined)?.estado ?? "rojo";
@@ -109,6 +135,8 @@ export function MapaMilitantes({ compacto = false, alto }: { compacto?: boolean;
         <MapContainer
           center={[18.89, -70.16]}
           zoom={8}
+          zoomSnap={0.25}
+          zoomDelta={0.25}
           ref={mapRef}
           style={{ height: "100%", width: "100%" }}
           scrollWheelZoom={!compacto}
@@ -127,28 +155,10 @@ export function MapaMilitantes({ compacto = false, alto }: { compacto?: boolean;
           {geo && (
             <GeoJSON
               key={nivel + (provinciaSeleccionada?.id ?? "")}
+              ref={geoLayerRef}
               data={geo}
               style={estiloFeature}
               onEachFeature={onEachFeature}
-              eventHandlers={{
-                add: (e) => {
-                  const layer = e.target as L.GeoJSON;
-                  const bounds = layer.getBounds();
-                  if (!bounds.isValid()) return;
-                  const map = mapRef.current;
-                  if (!map) return;
-                  map.fitBounds(bounds, { padding: [16, 16], animate: false });
-                  // En contenedores muy anchos y bajos (ej. el mapa compacto del
-                  // dashboard dentro de una grilla de 2 columnas), fitBounds
-                  // puede alejar demasiado el zoom para cubrir el ancho y termina
-                  // mostrando países vecinos. Forzamos un zoom mínimo razonable
-                  // centrado en el propio territorio.
-                  const zoomMinimo = compacto ? 9 : 6.8;
-                  if (map.getZoom() < zoomMinimo) {
-                    map.setView(bounds.getCenter(), zoomMinimo, { animate: false });
-                  }
-                },
-              }}
             />
           )}
         </MapContainer>
