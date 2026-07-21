@@ -20,7 +20,7 @@ type Propiedades = {
 
 type PanelInfo = Propiedades | null;
 
-export function MapaMilitantes({ compacto = false }: { compacto?: boolean }) {
+export function MapaMilitantes({ compacto = false, alto }: { compacto?: boolean; alto?: string }) {
   const [nivel, setNivel] = useState<"nacional" | "municipios">("nacional");
   const [provinciaSeleccionada, setProvinciaSeleccionada] = useState<{ id: string; nombre: string } | null>(
     null,
@@ -105,7 +105,7 @@ export function MapaMilitantes({ compacto = false }: { compacto?: boolean }) {
         )}
       </div>
 
-      <div className={`${compacto ? "h-[380px]" : "h-[520px]"} overflow-hidden rounded-xl border border-gray-200`}>
+      <div className={`${alto ?? (compacto ? "h-[380px]" : "h-[520px]")} overflow-hidden rounded-xl border border-gray-200`}>
         <MapContainer
           center={[18.89, -70.16]}
           zoom={8}
@@ -143,7 +143,7 @@ export function MapaMilitantes({ compacto = false }: { compacto?: boolean }) {
                   // puede alejar demasiado el zoom para cubrir el ancho y termina
                   // mostrando países vecinos. Forzamos un zoom mínimo razonable
                   // centrado en el propio territorio.
-                  const zoomMinimo = compacto ? 7.6 : 6.8;
+                  const zoomMinimo = compacto ? 9 : 6.8;
                   if (map.getZoom() < zoomMinimo) {
                     map.setView(bounds.getCenter(), zoomMinimo, { animate: false });
                   }

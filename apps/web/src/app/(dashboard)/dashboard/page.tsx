@@ -32,7 +32,7 @@ import { COLOR_ESTADO, type EstadoAvance } from "@cayena/shared";
 
 const MapaMilitantes = dynamic(
   () => import("@/components/MapaMilitantes").then((m) => m.MapaMilitantes),
-  { ssr: false, loading: () => <div className="h-[300px] animate-pulse rounded-xl bg-gray-100" /> },
+  { ssr: false, loading: () => <div className="h-[560px] animate-pulse rounded-xl bg-gray-100" /> },
 );
 
 type Fila = { id: string; nombre: string; militantesCaptados: number; meta: number; porcentaje: number; estado: EstadoAvance };
@@ -266,53 +266,49 @@ export default function DashboardPage() {
         )}
       </div>
 
+      <div className="mb-6">
+        <h2 className="mb-3 text-sm font-semibold text-gray-700">Mapa de avance nacional</h2>
+        <MapaMilitantes compacto alto="h-[560px]" />
+      </div>
+
+      {alertas.length > 0 && (
+        <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-5">
+          <h2 className="mb-3 text-sm font-semibold text-amber-800">⚠ Alertas de estancamiento de metas</h2>
+          <ul className="space-y-2">
+            {alertas.map((a) => (
+              <li key={a.id} className="text-sm">
+                <span className="font-semibold text-amber-900">{a.titulo}</span>
+                <span className="ml-2 text-amber-700">{a.cuerpo}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div className="mb-6 grid gap-6 lg:grid-cols-2">
-        <div className="space-y-6">
-          <div>
-            <h2 className="mb-3 text-sm font-semibold text-gray-700">Mapa de avance nacional</h2>
-            <MapaMilitantes compacto />
-          </div>
-
-          {alertas.length > 0 && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-5">
-              <h2 className="mb-3 text-sm font-semibold text-amber-800">⚠ Alertas de estancamiento de metas</h2>
-              <ul className="space-y-2">
-                {alertas.map((a) => (
-                  <li key={a.id} className="text-sm">
-                    <span className="font-semibold text-amber-900">{a.titulo}</span>
-                    <span className="ml-2 text-amber-700">{a.cuerpo}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h3 className="mb-2 text-sm font-semibold text-gray-700">Captación en el período</h3>
+          {resumen ? <SerieCaptacionChart serie={resumen.serieDiaria} /> : <div className="h-64 animate-pulse rounded-lg bg-gray-100" />}
         </div>
 
-        <div className="space-y-6">
+        <div className="grid gap-6 sm:grid-cols-2">
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-            <h3 className="mb-2 text-sm font-semibold text-gray-700">Captación en el período</h3>
-            {resumen ? <SerieCaptacionChart serie={resumen.serieDiaria} /> : <div className="h-64 animate-pulse rounded-lg bg-gray-100" />}
+            <h3 className="mb-2 text-sm font-semibold text-gray-700">Provincias por estado</h3>
+            {resumen ? <EstadosDonut conteo={resumen.provinciasPorEstado} /> : <div className="h-56 animate-pulse rounded-lg bg-gray-100" />}
           </div>
-
-          <div className="grid gap-6 sm:grid-cols-2">
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-              <h3 className="mb-2 text-sm font-semibold text-gray-700">Provincias por estado</h3>
-              {resumen ? <EstadosDonut conteo={resumen.provinciasPorEstado} /> : <div className="h-56 animate-pulse rounded-lg bg-gray-100" />}
-            </div>
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-              <h3 className="mb-2 text-sm font-semibold text-gray-700">Gastos por categoría</h3>
-              {resumen ? <GastosDonut datos={resumen.gastosPorCategoria} /> : <div className="h-56 animate-pulse rounded-lg bg-gray-100" />}
-            </div>
-          </div>
-
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-            {resumen ? (
-              <TopBottomProvincias top={resumen.topProvincias} bottom={resumen.bottomProvincias} />
-            ) : (
-              <div className="h-40 animate-pulse rounded-lg bg-gray-100" />
-            )}
+            <h3 className="mb-2 text-sm font-semibold text-gray-700">Gastos por categoría</h3>
+            {resumen ? <GastosDonut datos={resumen.gastosPorCategoria} /> : <div className="h-56 animate-pulse rounded-lg bg-gray-100" />}
           </div>
         </div>
+      </div>
+
+      <div className="mb-6 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        {resumen ? (
+          <TopBottomProvincias top={resumen.topProvincias} bottom={resumen.bottomProvincias} />
+        ) : (
+          <div className="h-40 animate-pulse rounded-lg bg-gray-100" />
+        )}
       </div>
 
       <div className="mb-6 grid gap-6 lg:grid-cols-2">
