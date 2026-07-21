@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Plus, Check, X } from "lucide-react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 
@@ -13,6 +13,8 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
   const [provincias, setProvincias] = useState<Lista>([]);
   const [municipios, setMunicipios] = useState<Lista>([]);
   const [distritos, setDistritos] = useState<Lista>([]);
+  const [localidades, setLocalidades] = useState<Lista>([]);
+  const [recintos, setRecintos] = useState<Lista>([]);
   const [form, setForm] = useState({
     nombre: "",
     cedula: "",
@@ -21,12 +23,19 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
     provinciaId: "",
     municipioId: "",
     distritoMunicipalId: "",
-    localidad: "",
-    recintoElectoral: "",
+    localidadId: "",
+    recintoElectoralId: "",
   });
   const [duplicados, setDuplicados] = useState<Duplicado[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  const [agregandoLocalidad, setAgregandoLocalidad] = useState(false);
+  const [nuevaLocalidad, setNuevaLocalidad] = useState("");
+  const [creandoLocalidad, setCreandoLocalidad] = useState(false);
+  const [agregandoRecinto, setAgregandoRecinto] = useState(false);
+  const [nuevoRecinto, setNuevoRecinto] = useState("");
+  const [creandoRecinto, setCreandoRecinto] = useState(false);
 
   useEffect(() => {
     apiFetch<Lista>("/geo/lista/provincias").then(setProvincias);
@@ -49,6 +58,26 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
       .then((filas) => setDistritos(filas.map((f) => ({ id: f.id, nombre: f.nombre }))))
       .catch(() => setDistritos([]));
   }, [form.municipioId]);
+
+  useEffect(() => {
+    if (!form.municipioId) {
+      setLocalidades([]);
+      return;
+    }
+    apiFetch<Lista>(`/localidades?municipioId=${form.municipioId}`)
+      .then(setLocalidades)
+      .catch(() => setLocalidades([]));
+  }, [form.municipioId]);
+
+  useEffect(() => {
+    if (!form.localidadId) {
+      setRecintos([]);
+      return;
+    }
+    apiFetch<Lista>(`/recintos?localidadId=${form.localidadId}`)
+      .then(setRecintos)
+      .catch(() => setRecintos([]));
+  }, [form.localidadId]);
 
   // RF-15: detectar posibles duplicados mientras se escribe cédula/teléfono.
   useEffect(() => {
@@ -77,6 +106,8 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
         body: JSON.stringify({
           ...form,
           distritoMunicipalId: form.distritoMunicipalId || undefined,
+          localidadId: form.localidadId || undefined,
+          recintoElectoralId: form.recintoElectoralId || undefined,
           consentimientoDatos: true,
         }),
       });
@@ -86,6 +117,44 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
       setError(err instanceof ApiError ? err.message : "No se pudo registrar el militante");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function crearLocalidad() {
+    if (!nuevaLocalidad.trim() || !form.municipioId) return;
+    setCreandoLocalidad(true);
+    try {
+      const creada = await apiFetch<{ id: string; nombre: string }>("/localidades", {
+        method: "POST",
+        body: JSON.stringify({ municipioId: form.municipioId, nombre: nuevaLocalidad.trim() }),
+      });
+      setLocalidades((prev) => [...prev, creada].sort((a, b) => a.nombre.localeCompare(b.nombre)));
+      setForm((f) => ({ ...f, localidadId: creada.id, recintoElectoralId: "" }));
+      setNuevaLocalidad("");
+      setAgregandoLocalidad(false);
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "No se pudo agregar la localidad", "error");
+    } finally {
+      setCreandoLocalidad(false);
+    }
+  }
+
+  async function crearRecinto() {
+    if (!nuevoRecinto.trim() || !form.localidadId) return;
+    setCreandoRecinto(true);
+    try {
+      const creado = await apiFetch<{ id: string; nombre: string }>("/recintos", {
+        method: "POST",
+        body: JSON.stringify({ localidadId: form.localidadId, nombre: nuevoRecinto.trim() }),
+      });
+      setRecintos((prev) => [...prev, creado].sort((a, b) => a.nombre.localeCompare(b.nombre)));
+      setForm((f) => ({ ...f, recintoElectoralId: creado.id }));
+      setNuevoRecinto("");
+      setAgregandoRecinto(false);
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "No se pudo agregar el recinto electoral", "error");
+    } finally {
+      setCreandoRecinto(false);
     }
   }
 
@@ -138,7 +207,9 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
             className="input"
             value={form.municipioId}
             disabled={!form.provinciaId}
-            onChange={(e) => setForm({ ...form, municipioId: e.target.value, distritoMunicipalId: "" })}
+            onChange={(e) =>
+              setForm({ ...form, municipioId: e.target.value, distritoMunicipalId: "", localidadId: "", recintoElectoralId: "" })
+            }
           >
             <option value="">Seleccionar…</option>
             {municipios.map((m) => (
@@ -162,11 +233,125 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
         </Field>
       )}
       <div className="grid grid-cols-2 gap-4">
-        <Field label="Localidad">
-          <input className="input" value={form.localidad} onChange={(e) => setForm({ ...form, localidad: e.target.value })} />
+        <Field label="Localidad (opcional)">
+          {!agregandoLocalidad ? (
+            <div className="flex gap-1.5">
+              <select
+                className="input"
+                value={form.localidadId}
+                disabled={!form.municipioId}
+                onChange={(e) => setForm({ ...form, localidadId: e.target.value, recintoElectoralId: "" })}
+              >
+                <option value="">{form.municipioId ? "Sin localidad / no aplica" : "Selecciona un municipio"}</option>
+                {localidades.map((l) => (
+                  <option key={l.id} value={l.id}>{l.nombre}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={!form.municipioId}
+                onClick={() => setAgregandoLocalidad(true)}
+                title="Agregar localidad"
+                className="flex shrink-0 items-center justify-center rounded-lg border border-institucional-600 px-2 text-institucional-700 hover:bg-institucional-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-300"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex gap-1.5">
+              <input
+                autoFocus
+                className="input"
+                placeholder="Nombre de la localidad"
+                value={nuevaLocalidad}
+                onChange={(e) => setNuevaLocalidad(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    crearLocalidad();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                onClick={crearLocalidad}
+                disabled={creandoLocalidad || !nuevaLocalidad.trim()}
+                className="flex shrink-0 items-center justify-center rounded-lg bg-institucional-600 px-2 text-white hover:bg-institucional-700 disabled:opacity-50"
+              >
+                <Check className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAgregandoLocalidad(false);
+                  setNuevaLocalidad("");
+                }}
+                className="flex shrink-0 items-center justify-center rounded-lg border border-gray-200 px-2 text-gray-500 hover:bg-gray-50"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
         </Field>
-        <Field label="Mesa / recinto electoral">
-          <input className="input" value={form.recintoElectoral} onChange={(e) => setForm({ ...form, recintoElectoral: e.target.value })} />
+        <Field label="Mesa / recinto electoral (opcional)">
+          {!agregandoRecinto ? (
+            <div className="flex gap-1.5">
+              <select
+                className="input"
+                value={form.recintoElectoralId}
+                disabled={!form.localidadId}
+                onChange={(e) => setForm({ ...form, recintoElectoralId: e.target.value })}
+              >
+                <option value="">{form.localidadId ? "Sin recinto / no aplica" : "Selecciona una localidad"}</option>
+                {recintos.map((r) => (
+                  <option key={r.id} value={r.id}>{r.nombre}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={!form.localidadId}
+                onClick={() => setAgregandoRecinto(true)}
+                title="Agregar recinto electoral"
+                className="flex shrink-0 items-center justify-center rounded-lg border border-institucional-600 px-2 text-institucional-700 hover:bg-institucional-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-300"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex gap-1.5">
+              <input
+                autoFocus
+                className="input"
+                placeholder="Nombre del recinto electoral"
+                value={nuevoRecinto}
+                onChange={(e) => setNuevoRecinto(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    crearRecinto();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                onClick={crearRecinto}
+                disabled={creandoRecinto || !nuevoRecinto.trim()}
+                className="flex shrink-0 items-center justify-center rounded-lg bg-institucional-600 px-2 text-white hover:bg-institucional-700 disabled:opacity-50"
+              >
+                <Check className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAgregandoRecinto(false);
+                  setNuevoRecinto("");
+                }}
+                className="flex shrink-0 items-center justify-center rounded-lg border border-gray-200 px-2 text-gray-500 hover:bg-gray-50"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
         </Field>
       </div>
 

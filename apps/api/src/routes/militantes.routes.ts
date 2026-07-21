@@ -162,8 +162,8 @@ const militanteSchema = z.object({
   provinciaId: z.string(),
   municipioId: z.string(),
   distritoMunicipalId: z.string().optional(),
-  localidad: z.string().optional(),
-  recintoElectoral: z.string().optional(),
+  localidadId: z.string().optional(),
+  recintoElectoralId: z.string().optional(),
   lat: z.number().optional(),
   lng: z.number().optional(),
   consentimientoDatos: z.literal(true),
@@ -260,6 +260,29 @@ militantesRouter.post(
       }
 
       try {
+        const nombreLocalidad = fila.localidad?.trim();
+        const nombreRecinto = fila.recintoelectoral?.trim();
+        let localidadId: string | undefined;
+        let recintoElectoralId: string | undefined;
+
+        if (nombreLocalidad) {
+          const localidad = await prisma.localidad.upsert({
+            where: { municipioId_nombre: { municipioId: municipio.id, nombre: nombreLocalidad } },
+            update: {},
+            create: { municipioId: municipio.id, nombre: nombreLocalidad },
+          });
+          localidadId = localidad.id;
+
+          if (nombreRecinto) {
+            const recinto = await prisma.recintoElectoral.upsert({
+              where: { localidadId_nombre: { localidadId: localidad.id, nombre: nombreRecinto } },
+              update: {},
+              create: { localidadId: localidad.id, nombre: nombreRecinto },
+            });
+            recintoElectoralId = recinto.id;
+          }
+        }
+
         const militante = await prisma.militante.create({
           data: {
             nombre,
@@ -268,8 +291,8 @@ militantesRouter.post(
             direccion: fila.direccion?.trim() || undefined,
             provinciaId: provincia.id,
             municipioId: municipio.id,
-            localidad: fila.localidad?.trim() || undefined,
-            recintoElectoral: fila.recintoelectoral?.trim() || undefined,
+            localidadId,
+            recintoElectoralId,
             consentimientoDatos: true,
             capturadoPorId: req.user!.id,
             origen: "IMPORTACION_CSV",

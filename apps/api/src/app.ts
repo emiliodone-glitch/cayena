@@ -15,6 +15,8 @@ import { notificacionesRouter } from "./routes/notificaciones.routes";
 import { encuestasRouter } from "./routes/encuestas.routes";
 import { transparenciaRouter } from "./routes/transparencia.routes";
 import { distritosRouter } from "./routes/distritos.routes";
+import { localidadesRouter } from "./routes/localidades.routes";
+import { recintosRouter } from "./routes/recintos.routes";
 import { UPLOADS_DIR } from "./lib/storage";
 import { errorHandler } from "./middleware/errorHandler";
 
@@ -48,6 +50,8 @@ export function createApp() {
   app.use("/encuestas", encuestasRouter);
   app.use("/transparencia", transparenciaRouter);
   app.use("/distritos", distritosRouter);
+  app.use("/localidades", localidadesRouter);
+  app.use("/recintos", recintosRouter);
 
   app.use(errorHandler);
 

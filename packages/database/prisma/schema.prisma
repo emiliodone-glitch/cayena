@@ -65,6 +65,7 @@ model Municipio {
   obras                Obra[]
   metas                MetaMilitantes[]
   distritosMunicipales DistritoMunicipal[]
+  localidades          Localidad[]
 
   createdAt DateTime @default(now())
 
@@ -88,6 +89,39 @@ model DistritoMunicipal {
 
   @@unique([municipioId, nombre])
   @@index([municipioId])
+}
+
+// Localidad dentro de un municipio (barrio/paraje/sección). Sin geometría
+// real disponible (igual que el distrito municipal), se gestiona como lista
+// editable desde el back office y sirve para filtrar el recinto electoral.
+model Localidad {
+  id          String    @id @default(cuid())
+  nombre      String
+  municipioId String
+  municipio   Municipio @relation(fields: [municipioId], references: [id])
+
+  militantes Militante[]
+  recintos   RecintoElectoral[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([municipioId, nombre])
+  @@index([municipioId])
+}
+
+// Mesa / recinto electoral, vinculado a una localidad específica.
+model RecintoElectoral {
+  id          String    @id @default(cuid())
+  nombre      String
+  localidadId String
+  localidad   Localidad @relation(fields: [localidadId], references: [id])
+
+  militantes Militante[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([localidadId, nombre])
+  @@index([localidadId])
 }
 
 // ---------------------------------------------------------------------------
@@ -231,8 +265,10 @@ model Militante {
   municipio           Municipio          @relation(fields: [municipioId], references: [id])
   distritoMunicipalId String?
   distritoMunicipal   DistritoMunicipal? @relation(fields: [distritoMunicipalId], references: [id])
-  localidad           String?
-  recintoElectoral    String?
+  localidadId         String?
+  localidad           Localidad?         @relation(fields: [localidadId], references: [id])
+  recintoElectoralId  String?
+  recintoElectoral    RecintoElectoral?  @relation(fields: [recintoElectoralId], references: [id])
 
   lat Float?
   lng Float?
@@ -255,6 +291,8 @@ model Militante {
   @@index([provinciaId])
   @@index([municipioId])
   @@index([distritoMunicipalId])
+  @@index([localidadId])
+  @@index([recintoElectoralId])
   @@index([cedula])
   @@index([telefono])
 }
