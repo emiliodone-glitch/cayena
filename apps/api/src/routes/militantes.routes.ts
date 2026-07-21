@@ -1,9 +1,19 @@
 import { Router } from "express";
+import multer from "multer";
+import { parse } from "csv-parse/sync";
 import { z } from "zod";
 import { prisma } from "@cayena/database";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { asyncRoute, HttpError } from "../middleware/errorHandler";
 import { otorgarInsigniaBienvenida } from "../lib/gamificacion";
+
+function normalizarNombre(s: string): string {
+  return s
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .trim()
+    .toLowerCase();
+}
 
 export const militantesRouter = Router();
 
@@ -173,6 +183,112 @@ militantesRouter.post(
     });
     await otorgarInsigniaBienvenida(militante.id);
     res.status(201).json(militante);
+  }),
+);
+
+const uploadCsv = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+type FilaImportacion = {
+  fila: number;
+  nombre?: string;
+  estado: "creado" | "duplicado" | "error";
+  mensaje?: string;
+};
+
+// Importación masiva de militantes vía CSV (columnas: nombre, cedula, telefono,
+// direccion, provincia, municipio, localidad, recintoElectoral). La provincia y
+// el municipio se resuelven por nombre (no hace falta conocer los IDs internos).
+militantesRouter.post(
+  "/importar",
+  requireRole("SUPERADMIN", "JEFE_SECRETARIA", "PROMOTOR"),
+  uploadCsv.single("file"),
+  asyncRoute(async (req, res) => {
+    if (!req.file) throw new HttpError(400, "No se recibió ningún archivo CSV");
+
+    let filas: Record<string, string>[];
+    try {
+      filas = parse(req.file.buffer.toString("utf-8"), {
+        columns: (header: string[]) => header.map((h) => normalizarNombre(h)),
+        skip_empty_lines: true,
+        trim: true,
+      });
+    } catch {
+      throw new HttpError(400, "No se pudo leer el CSV. Verifica el formato y los encabezados.");
+    }
+
+    const [provincias, municipios] = await Promise.all([
+      prisma.provincia.findMany(),
+      prisma.municipio.findMany(),
+    ]);
+    const provinciaPorNombre = new Map(provincias.map((p) => [normalizarNombre(p.nombre), p]));
+    const municipioPorNombreYProvincia = new Map(
+      municipios.map((m) => [`${m.provinciaId}::${normalizarNombre(m.nombre)}`, m]),
+    );
+
+    const resultados: FilaImportacion[] = [];
+    let creados = 0;
+
+    for (let i = 0; i < filas.length; i++) {
+      const fila = filas[i];
+      const numeroFila = i + 2; // +2: encabezado + índice base 1
+      const nombre = fila.nombre?.trim();
+      const cedula = fila.cedula?.trim();
+      const provinciaNombre = fila.provincia?.trim();
+      const municipioNombre = fila.municipio?.trim();
+
+      if (!nombre || !cedula || !provinciaNombre || !municipioNombre) {
+        resultados.push({ fila: numeroFila, nombre, estado: "error", mensaje: "Faltan campos obligatorios (nombre, cedula, provincia, municipio)" });
+        continue;
+      }
+
+      const provincia = provinciaPorNombre.get(normalizarNombre(provinciaNombre));
+      if (!provincia) {
+        resultados.push({ fila: numeroFila, nombre, estado: "error", mensaje: `Provincia "${provinciaNombre}" no encontrada` });
+        continue;
+      }
+      const municipio = municipioPorNombreYProvincia.get(`${provincia.id}::${normalizarNombre(municipioNombre)}`);
+      if (!municipio) {
+        resultados.push({ fila: numeroFila, nombre, estado: "error", mensaje: `Municipio "${municipioNombre}" no encontrado en ${provincia.nombre}` });
+        continue;
+      }
+
+      const existente = await prisma.militante.findUnique({ where: { cedula } });
+      if (existente) {
+        resultados.push({ fila: numeroFila, nombre, estado: "duplicado", mensaje: `Ya existe un registro con cédula ${cedula}` });
+        continue;
+      }
+
+      try {
+        const militante = await prisma.militante.create({
+          data: {
+            nombre,
+            cedula,
+            telefono: fila.telefono?.trim() || undefined,
+            direccion: fila.direccion?.trim() || undefined,
+            provinciaId: provincia.id,
+            municipioId: municipio.id,
+            localidad: fila.localidad?.trim() || undefined,
+            recintoElectoral: fila.recintoelectoral?.trim() || undefined,
+            consentimientoDatos: true,
+            capturadoPorId: req.user!.id,
+            origen: "IMPORTACION_CSV",
+          },
+        });
+        await otorgarInsigniaBienvenida(militante.id);
+        creados++;
+        resultados.push({ fila: numeroFila, nombre, estado: "creado" });
+      } catch {
+        resultados.push({ fila: numeroFila, nombre, estado: "error", mensaje: "Error inesperado al crear el registro" });
+      }
+    }
+
+    res.status(201).json({
+      total: filas.length,
+      creados,
+      duplicados: resultados.filter((r) => r.estado === "duplicado").length,
+      errores: resultados.filter((r) => r.estado === "error").length,
+      detalle: resultados,
+    });
   }),
 );
 

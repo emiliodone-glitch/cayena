@@ -3,68 +3,98 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
+import {
+  LayoutDashboard,
+  Building2,
+  CalendarDays,
+  Landmark,
+  MapPinned,
+  Trophy,
+  Wallet,
+  PieChart,
+  Users,
+  LogOut,
+  X,
+} from "lucide-react";
 import { useAuth } from "@/lib/auth";
 
 const NAV = [
-  { href: "/dashboard", label: "Dashboard", icon: "◧", roles: null },
-  { href: "/secretarias", label: "Secretarías", icon: "▤", roles: null },
-  { href: "/actividades", label: "Actividades", icon: "▦", roles: null },
-  { href: "/obras", label: "Obras", icon: "▲", roles: null },
-  { href: "/militantes", label: "Militantes", icon: "◉", roles: null },
-  { href: "/gastos", label: "Gastos", icon: "$", roles: null },
-  { href: "/poa", label: "POA / Metas", icon: "◔", roles: null },
-  { href: "/usuarios", label: "Usuarios", icon: "⚙", roles: ["SUPERADMIN"] },
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
+  { href: "/secretarias", label: "Secretarías", icon: Building2, roles: null },
+  { href: "/actividades", label: "Actividades", icon: CalendarDays, roles: null },
+  { href: "/obras", label: "Obras", icon: Landmark, roles: null },
+  { href: "/militantes", label: "Militantes", icon: MapPinned, roles: null },
+  { href: "/ranking", label: "Ranking", icon: Trophy, roles: ["SUPERADMIN", "JEFE_SECRETARIA", "AUDITOR"] },
+  { href: "/gastos", label: "Gastos", icon: Wallet, roles: null },
+  { href: "/poa", label: "POA / Metas", icon: PieChart, roles: null },
+  { href: "/usuarios", label: "Usuarios", icon: Users, roles: ["SUPERADMIN"] },
 ] as const;
 
-export function Sidebar() {
+export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const pathname = usePathname();
   const { user, logout } = useAuth();
 
   return (
-    <aside className="flex h-screen w-60 flex-col bg-institucional-900 text-institucional-50">
-      <div className="flex items-center gap-2 px-5 py-5">
-        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-institucional-600 text-lg">
-          ✻
-        </span>
-        <div>
-          <div className="text-sm font-bold leading-none">Cayena</div>
-          <div className="text-[11px] text-institucional-100/70">Fuerza del Pueblo</div>
-        </div>
-      </div>
-
-      <nav className="flex-1 space-y-1 px-3">
-        {NAV.filter((item) => !item.roles || (user && (item.roles as readonly string[]).includes(user.role))).map(
-          (item) => {
-            const active = pathname?.startsWith(item.href);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={clsx(
-                  "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition",
-                  active
-                    ? "bg-institucional-600 font-semibold text-white"
-                    : "text-institucional-100/80 hover:bg-institucional-800",
-                )}
-              >
-                <span className="w-4 text-center">{item.icon}</span>
-                {item.label}
-              </Link>
-            );
-          },
+    <>
+      {open && <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={onClose} />}
+      <aside
+        className={clsx(
+          "fixed inset-y-0 left-0 z-40 flex h-screen w-60 flex-shrink-0 flex-col bg-institucional-900 text-institucional-50 transition-transform md:static md:translate-x-0",
+          open ? "translate-x-0" : "-translate-x-full",
         )}
-      </nav>
+      >
+        <div className="flex items-center justify-between px-5 py-5">
+          <div className="flex items-center gap-2">
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-institucional-600 text-lg">
+              ✻
+            </span>
+            <div>
+              <div className="text-sm font-bold leading-none">Cayena</div>
+              <div className="text-[11px] text-institucional-100/70">Fuerza del Pueblo</div>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-institucional-100/70 hover:text-white md:hidden">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
 
-      <div className="border-t border-institucional-800 px-4 py-4 text-xs">
-        <div className="mb-2 truncate font-medium">{user?.nombre}</div>
-        <div className="mb-3 text-institucional-100/60">{user?.role}</div>
-        <button
-          onClick={logout}
-          className="w-full rounded-lg bg-institucional-800 py-1.5 text-institucional-50 hover:bg-institucional-700"
-        >
-          Cerrar sesión
-        </button>
-      </div>
-    </aside>
+        <nav className="flex-1 space-y-1 overflow-y-auto px-3">
+          {NAV.filter((item) => !item.roles || (user && (item.roles as readonly string[]).includes(user.role))).map(
+            (item) => {
+              const active = pathname?.startsWith(item.href);
+              const Icon = item.icon;
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  onClick={onClose}
+                  className={clsx(
+                    "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition",
+                    active
+                      ? "bg-institucional-600 font-semibold text-white"
+                      : "text-institucional-100/80 hover:bg-institucional-800",
+                  )}
+                >
+                  <Icon className="h-4 w-4 flex-shrink-0" />
+                  {item.label}
+                </Link>
+              );
+            },
+          )}
+        </nav>
+
+        <div className="border-t border-institucional-800 px-4 py-4 text-xs">
+          <div className="mb-2 truncate font-medium">{user?.nombre}</div>
+          <div className="mb-3 text-institucional-100/60">{user?.role}</div>
+          <button
+            onClick={logout}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-institucional-800 py-1.5 text-institucional-50 hover:bg-institucional-700"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+            Cerrar sesión
+          </button>
+        </div>
+      </aside>
+    </>
   );
 }

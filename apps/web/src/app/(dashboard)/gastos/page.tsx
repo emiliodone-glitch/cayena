@@ -1,8 +1,13 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import { Plus, Trash2 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useToast } from "@/components/Toast";
+import { Drawer } from "@/components/Drawer";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { TableSkeleton, CardSkeleton } from "@/components/Skeleton";
 
 type Gasto = {
   id: string;
@@ -19,11 +24,12 @@ const fmtMoney = new Intl.NumberFormat("es-DO", { style: "currency", currency: "
 
 export default function GastosPage() {
   const { user } = useAuth();
-  const [data, setData] = useState<{ gastos: Gasto[]; totales: { ingresos: number; gastos: number } }>({
-    gastos: [],
-    totales: { ingresos: 0, gastos: 0 },
-  });
+  const toast = useToast();
+  const [data, setData] = useState<{ gastos: Gasto[]; totales: { ingresos: number; gastos: number } } | null>(null);
   const [secretarias, setSecretarias] = useState<Secretaria[]>([]);
+  const [drawerAbierto, setDrawerAbierto] = useState(false);
+  const [eliminando, setEliminando] = useState<Gasto | null>(null);
+  const [borrando, setBorrando] = useState(false);
   const [form, setForm] = useState({
     tipo: "GASTO",
     monto: "",
@@ -33,7 +39,7 @@ export default function GastosPage() {
   });
 
   function cargar() {
-    apiFetch<typeof data>("/gastos").then(setData);
+    apiFetch<NonNullable<typeof data>>("/gastos").then(setData);
   }
 
   useEffect(() => {
@@ -51,66 +57,117 @@ export default function GastosPage() {
         secretariaId: form.secretariaId || undefined,
       }),
     });
+    toast("Movimiento registrado");
     setForm({ tipo: "GASTO", monto: "", categoria: "", fecha: "", secretariaId: "" });
+    setDrawerAbierto(false);
     cargar();
+  }
+
+  async function confirmarEliminar() {
+    if (!eliminando) return;
+    setBorrando(true);
+    try {
+      await apiFetch(`/gastos/${eliminando.id}`, { method: "DELETE" });
+      toast("Movimiento eliminado");
+      setEliminando(null);
+      cargar();
+    } catch {
+      toast("No se pudo eliminar el movimiento", "error");
+    } finally {
+      setBorrando(false);
+    }
   }
 
   return (
     <div>
-      <h1 className="mb-6 text-xl font-bold text-institucional-900">Finanzas</h1>
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-xl font-bold text-institucional-900">Finanzas</h1>
+        {user?.role !== "AUDITOR" && (
+          <button
+            onClick={() => setDrawerAbierto(true)}
+            className="flex items-center gap-1.5 rounded-lg bg-institucional-600 px-4 py-2 text-sm font-semibold text-white hover:bg-institucional-700"
+          >
+            <Plus className="h-4 w-4" /> Nuevo movimiento
+          </button>
+        )}
+      </div>
 
       <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-3">
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="text-2xl font-bold text-institucional-700">{fmtMoney.format(data.totales.ingresos)}</div>
-          <div className="mt-1 text-sm text-gray-500">Ingresos</div>
-        </div>
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="text-2xl font-bold text-red-600">{fmtMoney.format(data.totales.gastos)}</div>
-          <div className="mt-1 text-sm text-gray-500">Gastos</div>
-        </div>
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="text-2xl font-bold text-institucional-900">
-            {fmtMoney.format(data.totales.ingresos - data.totales.gastos)}
-          </div>
-          <div className="mt-1 text-sm text-gray-500">Balance</div>
-        </div>
+        {data === null ? (
+          <>
+            <CardSkeleton />
+            <CardSkeleton />
+            <CardSkeleton />
+          </>
+        ) : (
+          <>
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+              <div className="text-2xl font-bold text-institucional-700">{fmtMoney.format(data.totales.ingresos)}</div>
+              <div className="mt-1 text-sm text-gray-500">Ingresos</div>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+              <div className="text-2xl font-bold text-red-600">{fmtMoney.format(data.totales.gastos)}</div>
+              <div className="mt-1 text-sm text-gray-500">Gastos</div>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+              <div className="text-2xl font-bold text-institucional-900">
+                {fmtMoney.format(data.totales.ingresos - data.totales.gastos)}
+              </div>
+              <div className="mt-1 text-sm text-gray-500">Balance</div>
+            </div>
+          </>
+        )}
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-gray-50 text-xs uppercase text-gray-400">
-            <tr>
-              <th className="px-4 py-2">Tipo</th>
-              <th className="px-4 py-2">Categoría</th>
-              <th className="px-4 py-2">Monto</th>
-              <th className="px-4 py-2">Fecha</th>
-              <th className="px-4 py-2">Secretaría</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {data.gastos.map((g) => (
-              <tr key={g.id}>
-                <td className="px-4 py-2">
-                  <span className={g.tipo === "INGRESO" ? "text-institucional-700" : "text-red-600"}>{g.tipo}</span>
-                </td>
-                <td className="px-4 py-2">{g.categoria}</td>
-                <td className="px-4 py-2">{fmtMoney.format(Number(g.monto))}</td>
-                <td className="px-4 py-2">{new Date(g.fecha).toLocaleDateString("es-DO")}</td>
-                <td className="px-4 py-2">{g.secretaria?.nombre ?? "General"}</td>
-              </tr>
-            ))}
-            {data.gastos.length === 0 && (
+      {data === null ? (
+        <TableSkeleton cols={5} />
+      ) : (
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-gray-50 text-xs uppercase text-gray-400">
               <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-gray-400">Sin movimientos.</td>
+                <th className="px-4 py-2">Tipo</th>
+                <th className="px-4 py-2">Categoría</th>
+                <th className="px-4 py-2">Monto</th>
+                <th className="px-4 py-2">Fecha</th>
+                <th className="px-4 py-2">Secretaría</th>
+                {user?.role === "SUPERADMIN" && <th className="px-4 py-2 text-right">Acciones</th>}
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {data.gastos.map((g) => (
+                <tr key={g.id}>
+                  <td className="px-4 py-2">
+                    <span className={g.tipo === "INGRESO" ? "text-institucional-700" : "text-red-600"}>{g.tipo}</span>
+                  </td>
+                  <td className="px-4 py-2">{g.categoria}</td>
+                  <td className="px-4 py-2">{fmtMoney.format(Number(g.monto))}</td>
+                  <td className="px-4 py-2">{new Date(g.fecha).toLocaleDateString("es-DO")}</td>
+                  <td className="px-4 py-2">{g.secretaria?.nombre ?? "General"}</td>
+                  {user?.role === "SUPERADMIN" && (
+                    <td className="px-4 py-2 text-right">
+                      <button
+                        onClick={() => setEliminando(g)}
+                        className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+              {data.gastos.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-6 text-center text-gray-400">Sin movimientos.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
 
-      {user?.role !== "AUDITOR" && (
-        <form onSubmit={crear} className="mt-8 max-w-lg space-y-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-700">Nuevo movimiento</h2>
+      <Drawer open={drawerAbierto} onClose={() => setDrawerAbierto(false)} title="Nuevo movimiento">
+        <form onSubmit={crear} className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <select
               value={form.tipo}
@@ -156,11 +213,29 @@ export default function GastosPage() {
               ))}
             </select>
           </div>
-          <button className="rounded-lg bg-institucional-600 px-4 py-2 text-sm font-semibold text-white hover:bg-institucional-700">
-            Registrar
-          </button>
+          <div className="flex gap-2 pt-2">
+            <button className="flex-1 rounded-lg bg-institucional-600 px-4 py-2 text-sm font-semibold text-white hover:bg-institucional-700">
+              Registrar
+            </button>
+            <button
+              type="button"
+              onClick={() => setDrawerAbierto(false)}
+              className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"
+            >
+              Cancelar
+            </button>
+          </div>
         </form>
-      )}
+      </Drawer>
+
+      <ConfirmDialog
+        open={!!eliminando}
+        title="¿Eliminar este movimiento?"
+        mensaje={`Se eliminará el registro de ${eliminando?.categoria} por ${eliminando ? fmtMoney.format(Number(eliminando.monto)) : ""}.`}
+        onConfirm={confirmarEliminar}
+        onCancel={() => setEliminando(null)}
+        loading={borrando}
+      />
     </div>
   );
 }

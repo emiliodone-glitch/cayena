@@ -20,7 +20,7 @@ type Propiedades = {
 
 type PanelInfo = Propiedades | null;
 
-export function MapaMilitantes() {
+export function MapaMilitantes({ compacto = false }: { compacto?: boolean }) {
   const [nivel, setNivel] = useState<"nacional" | "municipios">("nacional");
   const [provinciaSeleccionada, setProvinciaSeleccionada] = useState<{ id: string; nombre: string } | null>(
     null,
@@ -105,13 +105,13 @@ export function MapaMilitantes() {
         )}
       </div>
 
-      <div className="h-[520px] overflow-hidden rounded-xl border border-gray-200">
+      <div className={`${compacto ? "h-[300px]" : "h-[520px]"} overflow-hidden rounded-xl border border-gray-200`}>
         <MapContainer
           center={[18.89, -70.16]}
           zoom={8}
           ref={mapRef}
           style={{ height: "100%", width: "100%" }}
-          scrollWheelZoom
+          scrollWheelZoom={!compacto}
         >
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'

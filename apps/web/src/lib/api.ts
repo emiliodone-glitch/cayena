@@ -61,6 +61,22 @@ export function resolveFileUrl(url: string): string {
   return url.startsWith("http") ? url : `${API_URL}${url}`;
 }
 
+export async function uploadCsv<T = unknown>(path: string, file: File): Promise<T> {
+  const { accessToken } = getTokens();
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new ApiError(res.status, body.error ?? "No se pudo subir el archivo");
+  }
+  return res.json();
+}
+
 export async function apiFetch<T = unknown>(
   path: string,
   options: RequestInit = {},

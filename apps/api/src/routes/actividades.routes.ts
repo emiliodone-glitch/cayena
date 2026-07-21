@@ -126,3 +126,16 @@ actividadesRouter.patch(
     res.json(updated);
   }),
 );
+
+actividadesRouter.delete(
+  "/:id",
+  asyncRoute(async (req, res) => {
+    const actividad = await prisma.actividad.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (req.user!.role !== "SUPERADMIN" && req.user!.secretariaId !== actividad.secretariaId) {
+      throw new HttpError(403, "No autorizado");
+    }
+    if (req.user!.role === "AUDITOR") throw new HttpError(403, "Auditor es de solo lectura");
+    await prisma.actividad.delete({ where: { id: req.params.id } });
+    res.status(204).send();
+  }),
+);

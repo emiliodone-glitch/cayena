@@ -27,6 +27,50 @@ usuariosRouter.get(
 );
 
 usuariosRouter.use(requireAuth);
+
+// Fase 2 — ranking interno de promotores/digitadores: quién ha captado más
+// militantes, para generar competencia sana entre el equipo de campo.
+usuariosRouter.get(
+  "/ranking-captacion",
+  requireRole("SUPERADMIN", "JEFE_SECRETARIA", "AUDITOR"),
+  asyncRoute(async (req, res) => {
+    const scopedSecretariaId = req.user!.role === "JEFE_SECRETARIA" ? req.user!.secretariaId ?? undefined : undefined;
+
+    const conteos = await prisma.militante.groupBy({
+      by: ["capturadoPorId"],
+      where: {
+        capturadoPorId: { not: null },
+        ...(scopedSecretariaId ? { capturadoPor: { secretariaId: scopedSecretariaId } } : {}),
+      },
+      _count: { _all: true },
+      orderBy: { _count: { capturadoPorId: "desc" } },
+      take: 20,
+    });
+
+    const usuarios = await prisma.user.findMany({
+      where: { id: { in: conteos.map((c) => c.capturadoPorId as string) } },
+      select: { id: true, nombre: true, role: true, secretaria: { select: { nombre: true } } },
+    });
+    const usuarioPorId = new Map(usuarios.map((u) => [u.id, u]));
+
+    res.json(
+      conteos
+        .map((c) => {
+          const u = usuarioPorId.get(c.capturadoPorId as string);
+          if (!u) return null;
+          return {
+            id: u.id,
+            nombre: u.nombre,
+            role: u.role,
+            secretaria: u.secretaria?.nombre ?? null,
+            militantesCaptados: c._count._all,
+          };
+        })
+        .filter((x): x is NonNullable<typeof x> => x !== null),
+    );
+  }),
+);
+
 usuariosRouter.use(requireRole("SUPERADMIN"));
 
 // RF-21
