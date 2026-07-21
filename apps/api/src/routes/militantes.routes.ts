@@ -164,6 +164,7 @@ const militanteSchema = z.object({
   distritoMunicipalId: z.string().optional(),
   localidadId: z.string().optional(),
   recintoElectoralId: z.string().optional(),
+  colegioId: z.string().optional(),
   lat: z.number().optional(),
   lng: z.number().optional(),
   consentimientoDatos: z.literal(true),
@@ -197,8 +198,9 @@ type FilaImportacion = {
 };
 
 // Importación masiva de militantes vía CSV (columnas: nombre, cedula, telefono,
-// direccion, provincia, municipio, localidad, recintoElectoral). La provincia y
-// el municipio se resuelven por nombre (no hace falta conocer los IDs internos).
+// direccion, provincia, municipio, localidad, recintoElectoral, colegio). La
+// provincia y el municipio se resuelven por nombre (no hace falta conocer los
+// IDs internos).
 militantesRouter.post(
   "/importar",
   requireRole("SUPERADMIN", "JEFE_SECRETARIA", "PROMOTOR"),
@@ -262,8 +264,10 @@ militantesRouter.post(
       try {
         const nombreLocalidad = fila.localidad?.trim();
         const nombreRecinto = fila.recintoelectoral?.trim();
+        const numeroColegio = fila.colegio?.trim();
         let localidadId: string | undefined;
         let recintoElectoralId: string | undefined;
+        let colegioId: string | undefined;
 
         if (nombreLocalidad) {
           const localidad = await prisma.localidad.upsert({
@@ -280,6 +284,15 @@ militantesRouter.post(
               create: { localidadId: localidad.id, nombre: nombreRecinto },
             });
             recintoElectoralId = recinto.id;
+
+            if (numeroColegio) {
+              const colegio = await prisma.colegio.upsert({
+                where: { recintoElectoralId_numero: { recintoElectoralId: recinto.id, numero: numeroColegio } },
+                update: {},
+                create: { recintoElectoralId: recinto.id, numero: numeroColegio },
+              });
+              colegioId = colegio.id;
+            }
           }
         }
 
@@ -293,6 +306,7 @@ militantesRouter.post(
             municipioId: municipio.id,
             localidadId,
             recintoElectoralId,
+            colegioId,
             consentimientoDatos: true,
             capturadoPorId: req.user!.id,
             origen: "IMPORTACION_CSV",

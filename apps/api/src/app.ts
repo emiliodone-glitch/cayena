@@ -17,6 +17,7 @@ import { transparenciaRouter } from "./routes/transparencia.routes";
 import { distritosRouter } from "./routes/distritos.routes";
 import { localidadesRouter } from "./routes/localidades.routes";
 import { recintosRouter } from "./routes/recintos.routes";
+import { colegiosRouter } from "./routes/colegios.routes";
 import { UPLOADS_DIR } from "./lib/storage";
 import { errorHandler } from "./middleware/errorHandler";
 
@@ -52,6 +53,7 @@ export function createApp() {
   app.use("/distritos", distritosRouter);
   app.use("/localidades", localidadesRouter);
   app.use("/recintos", recintosRouter);
+  app.use("/colegios", colegiosRouter);
 
   app.use(errorHandler);
 

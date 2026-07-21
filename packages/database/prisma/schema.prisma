@@ -109,19 +109,36 @@ model Localidad {
   @@index([municipioId])
 }
 
-// Mesa / recinto electoral, vinculado a una localidad específica.
+// Recinto electoral (local físico), vinculado a una localidad específica.
 model RecintoElectoral {
   id          String    @id @default(cuid())
   nombre      String
+  direccion   String?
   localidadId String
   localidad   Localidad @relation(fields: [localidadId], references: [id])
 
   militantes Militante[]
+  colegios   Colegio[]
 
   createdAt DateTime @default(now())
 
   @@unique([localidadId, nombre])
   @@index([localidadId])
+}
+
+// Colegio electoral (la mesa exacta impresa en la cédula), dentro de un recinto.
+model Colegio {
+  id                 String           @id @default(cuid())
+  numero             String
+  recintoElectoralId String
+  recintoElectoral   RecintoElectoral @relation(fields: [recintoElectoralId], references: [id])
+
+  militantes Militante[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([recintoElectoralId, numero])
+  @@index([recintoElectoralId])
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +286,8 @@ model Militante {
   localidad           Localidad?         @relation(fields: [localidadId], references: [id])
   recintoElectoralId  String?
   recintoElectoral    RecintoElectoral?  @relation(fields: [recintoElectoralId], references: [id])
+  colegioId           String?
+  colegio             Colegio?           @relation(fields: [colegioId], references: [id])
 
   lat Float?
   lng Float?
@@ -293,6 +312,7 @@ model Militante {
   @@index([distritoMunicipalId])
   @@index([localidadId])
   @@index([recintoElectoralId])
+  @@index([colegioId])
   @@index([cedula])
   @@index([telefono])
 }

@@ -21,8 +21,8 @@ type Resultado = {
 };
 
 const PLANTILLA =
-  "nombre,cedula,telefono,direccion,provincia,municipio,localidad,recintoElectoral\n" +
-  "Juan Pérez,00100000001,8095551234,Calle Duarte 12,Santiago,Santiago de los Caballeros,Los Jardines,Escuela Central\n";
+  "nombre,cedula,telefono,direccion,provincia,municipio,localidad,recintoElectoral,colegio\n" +
+  "Juan Pérez,00100000001,8095551234,Calle Duarte 12,Santiago,Santiago de los Caballeros,Los Jardines,Escuela Central,0621\n";
 
 function descargarPlantilla() {
   const blob = new Blob([PLANTILLA], { type: "text/csv;charset=utf-8" });
@@ -65,7 +65,7 @@ export function ImportarMilitantesCSV({ onImportado }: { onImportado: () => void
     <div className="space-y-4">
       <p className="text-sm text-gray-600">
         Sube un CSV con columnas: <code className="rounded bg-gray-100 px-1">nombre, cedula, telefono, direccion,
-        provincia, municipio, localidad, recintoElectoral</code>. La provincia y el municipio se buscan por nombre.
+        provincia, municipio, localidad, recintoElectoral, colegio</code>. La provincia y el municipio se buscan por nombre.
       </p>
 
       <button

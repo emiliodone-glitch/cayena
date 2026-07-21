@@ -6,6 +6,8 @@ import { apiFetch, ApiError } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 
 type Lista = { id: string; nombre: string }[];
+type Recinto = { id: string; nombre: string; direccion: string | null };
+type Colegio = { id: string; numero: string };
 type Duplicado = { nombre: string; cedula: string; telefono: string | null };
 
 export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCancel: () => void }) {
@@ -14,7 +16,8 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
   const [municipios, setMunicipios] = useState<Lista>([]);
   const [distritos, setDistritos] = useState<Lista>([]);
   const [localidades, setLocalidades] = useState<Lista>([]);
-  const [recintos, setRecintos] = useState<Lista>([]);
+  const [recintos, setRecintos] = useState<Recinto[]>([]);
+  const [colegios, setColegios] = useState<Colegio[]>([]);
   const [form, setForm] = useState({
     nombre: "",
     cedula: "",
@@ -25,6 +28,7 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
     distritoMunicipalId: "",
     localidadId: "",
     recintoElectoralId: "",
+    colegioId: "",
   });
   const [duplicados, setDuplicados] = useState<Duplicado[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +40,9 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
   const [agregandoRecinto, setAgregandoRecinto] = useState(false);
   const [nuevoRecinto, setNuevoRecinto] = useState("");
   const [creandoRecinto, setCreandoRecinto] = useState(false);
+  const [agregandoColegio, setAgregandoColegio] = useState(false);
+  const [nuevoColegio, setNuevoColegio] = useState("");
+  const [creandoColegio, setCreandoColegio] = useState(false);
 
   useEffect(() => {
     apiFetch<Lista>("/geo/lista/provincias").then(setProvincias);
@@ -74,10 +81,22 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
       setRecintos([]);
       return;
     }
-    apiFetch<Lista>(`/recintos?localidadId=${form.localidadId}`)
+    apiFetch<Recinto[]>(`/recintos?localidadId=${form.localidadId}`)
       .then(setRecintos)
       .catch(() => setRecintos([]));
   }, [form.localidadId]);
+
+  useEffect(() => {
+    if (!form.recintoElectoralId) {
+      setColegios([]);
+      return;
+    }
+    apiFetch<Colegio[]>(`/colegios?recintoElectoralId=${form.recintoElectoralId}`)
+      .then(setColegios)
+      .catch(() => setColegios([]));
+  }, [form.recintoElectoralId]);
+
+  const recintoSeleccionado = recintos.find((r) => r.id === form.recintoElectoralId);
 
   // RF-15: detectar posibles duplicados mientras se escribe cédula/teléfono.
   useEffect(() => {
@@ -108,6 +127,7 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
           distritoMunicipalId: form.distritoMunicipalId || undefined,
           localidadId: form.localidadId || undefined,
           recintoElectoralId: form.recintoElectoralId || undefined,
+          colegioId: form.colegioId || undefined,
           consentimientoDatos: true,
         }),
       });
@@ -143,18 +163,37 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
     if (!nuevoRecinto.trim() || !form.localidadId) return;
     setCreandoRecinto(true);
     try {
-      const creado = await apiFetch<{ id: string; nombre: string }>("/recintos", {
+      const creado = await apiFetch<Recinto>("/recintos", {
         method: "POST",
         body: JSON.stringify({ localidadId: form.localidadId, nombre: nuevoRecinto.trim() }),
       });
       setRecintos((prev) => [...prev, creado].sort((a, b) => a.nombre.localeCompare(b.nombre)));
-      setForm((f) => ({ ...f, recintoElectoralId: creado.id }));
+      setForm((f) => ({ ...f, recintoElectoralId: creado.id, colegioId: "" }));
       setNuevoRecinto("");
       setAgregandoRecinto(false);
     } catch (err) {
       toast(err instanceof ApiError ? err.message : "No se pudo agregar el recinto electoral", "error");
     } finally {
       setCreandoRecinto(false);
+    }
+  }
+
+  async function crearColegio() {
+    if (!nuevoColegio.trim() || !form.recintoElectoralId) return;
+    setCreandoColegio(true);
+    try {
+      const creado = await apiFetch<Colegio>("/colegios", {
+        method: "POST",
+        body: JSON.stringify({ recintoElectoralId: form.recintoElectoralId, numero: nuevoColegio.trim() }),
+      });
+      setColegios((prev) => [...prev, creado].sort((a, b) => a.numero.localeCompare(b.numero)));
+      setForm((f) => ({ ...f, colegioId: creado.id }));
+      setNuevoColegio("");
+      setAgregandoColegio(false);
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "No se pudo agregar el colegio", "error");
+    } finally {
+      setCreandoColegio(false);
     }
   }
 
@@ -300,7 +339,7 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
                 className="input"
                 value={form.recintoElectoralId}
                 disabled={!form.localidadId}
-                onChange={(e) => setForm({ ...form, recintoElectoralId: e.target.value })}
+                onChange={(e) => setForm({ ...form, recintoElectoralId: e.target.value, colegioId: "" })}
               >
                 <option value="">{form.localidadId ? "Sin recinto / no aplica" : "Selecciona una localidad"}</option>
                 {recintos.map((r) => (
@@ -354,6 +393,73 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
           )}
         </Field>
       </div>
+
+      {recintoSeleccionado?.direccion && (
+        <p className="-mt-2 text-xs text-gray-500">
+          Dirección del recinto: {recintoSeleccionado.direccion}
+        </p>
+      )}
+
+      <Field label="Colegio electoral (opcional, el número impreso en la cédula)">
+        {!agregandoColegio ? (
+          <div className="flex gap-1.5">
+            <select
+              className="input"
+              value={form.colegioId}
+              disabled={!form.recintoElectoralId}
+              onChange={(e) => setForm({ ...form, colegioId: e.target.value })}
+            >
+              <option value="">{form.recintoElectoralId ? "Sin colegio / no aplica" : "Selecciona un recinto"}</option>
+              {colegios.map((c) => (
+                <option key={c.id} value={c.id}>{c.numero}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              disabled={!form.recintoElectoralId}
+              onClick={() => setAgregandoColegio(true)}
+              title="Agregar colegio"
+              className="flex shrink-0 items-center justify-center rounded-lg border border-institucional-600 px-2 text-institucional-700 hover:bg-institucional-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-300"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </div>
+        ) : (
+          <div className="flex gap-1.5">
+            <input
+              autoFocus
+              className="input"
+              placeholder="Número de colegio, ej. 0621A"
+              value={nuevoColegio}
+              onChange={(e) => setNuevoColegio(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  crearColegio();
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={crearColegio}
+              disabled={creandoColegio || !nuevoColegio.trim()}
+              className="flex shrink-0 items-center justify-center rounded-lg bg-institucional-600 px-2 text-white hover:bg-institucional-700 disabled:opacity-50"
+            >
+              <Check className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAgregandoColegio(false);
+                setNuevoColegio("");
+              }}
+              className="flex shrink-0 items-center justify-center rounded-lg border border-gray-200 px-2 text-gray-500 hover:bg-gray-50"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+      </Field>
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 
