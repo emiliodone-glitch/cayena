@@ -19,3 +19,14 @@ export function loadMunicipiosGeo(): GeoJSON.FeatureCollection {
   }
   return municipiosCache!;
 }
+
+let distritosMunicipalesCache: GeoJSON.FeatureCollection | null = null;
+
+export function loadDistritosMunicipalesGeo(): GeoJSON.FeatureCollection {
+  if (!distritosMunicipalesCache) {
+    distritosMunicipalesCache = JSON.parse(
+      fs.readFileSync(path.join(GEO_DIR, "distritos-municipales.geojson"), "utf-8"),
+    );
+  }
+  return distritosMunicipalesCache!;
+}

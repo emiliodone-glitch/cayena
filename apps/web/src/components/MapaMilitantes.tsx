@@ -16,6 +16,7 @@ type Propiedades = {
   porcentaje: number;
   estado: EstadoAvance;
   provinciaId?: string;
+  municipioId?: string;
 };
 
 type PanelInfo = Propiedades | null;
@@ -32,8 +33,11 @@ export function MapaMilitantes({
    * de forma responsiva con el ancho del contenedor en vez de usar una altura fija. */
   aspecto?: string;
 }) {
-  const [nivel, setNivel] = useState<"nacional" | "municipios">("nacional");
+  const [nivel, setNivel] = useState<"nacional" | "municipios" | "distritos">("nacional");
   const [provinciaSeleccionada, setProvinciaSeleccionada] = useState<{ id: string; nombre: string } | null>(
+    null,
+  );
+  const [municipioSeleccionado, setMunicipioSeleccionado] = useState<{ id: string; nombre: string } | null>(
     null,
   );
   const [geo, setGeo] = useState<FeatureCollection | null>(null);
@@ -50,7 +54,11 @@ export function MapaMilitantes({
     // se desmonte de inmediato y el nuevo se monte fresco cuando llegue el fetch.
     setGeo(null);
     const path =
-      nivel === "nacional" ? "/geo/provincias" : `/geo/provincias/${provinciaSeleccionada?.id}/municipios`;
+      nivel === "nacional"
+        ? "/geo/provincias"
+        : nivel === "municipios"
+          ? `/geo/provincias/${provinciaSeleccionada?.id}/municipios`
+          : `/geo/municipios/${municipioSeleccionado?.id}/distritos-municipales`;
     apiFetch<FeatureCollection>(path)
       .then((data) => {
         setGeo(data);
@@ -58,7 +66,7 @@ export function MapaMilitantes({
       })
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nivel, provinciaSeleccionada?.id]);
+  }, [nivel, provinciaSeleccionada?.id, municipioSeleccionado?.id]);
 
   useEffect(() => {
     if (!geo) return;
@@ -121,6 +129,9 @@ export function MapaMilitantes({
         if (nivel === "nacional") {
           setProvinciaSeleccionada({ id: props.id, nombre: props.nombre });
           setNivel("municipios");
+        } else if (nivel === "municipios") {
+          setMunicipioSeleccionado({ id: props.id, nombre: props.nombre });
+          setNivel("distritos");
         } else {
           setPanel(props);
         }
@@ -131,6 +142,13 @@ export function MapaMilitantes({
   function volverANacional() {
     setNivel("nacional");
     setProvinciaSeleccionada(null);
+    setMunicipioSeleccionado(null);
+    setPanel(null);
+  }
+
+  function volverAMunicipios() {
+    setNivel("municipios");
+    setMunicipioSeleccionado(null);
     setPanel(null);
   }
 
@@ -140,8 +158,10 @@ export function MapaMilitantes({
         <div className="text-sm text-gray-500">
           {nivel === "nacional" ? (
             "Vista nacional por provincia"
-          ) : (
+          ) : nivel === "municipios" ? (
             <>Municipios de <span className="font-semibold text-institucional-900">{provinciaSeleccionada?.nombre}</span></>
+          ) : (
+            <>Distritos municipales de <span className="font-semibold text-institucional-900">{municipioSeleccionado?.nombre}</span></>
           )}
         </div>
         {nivel === "municipios" && (
@@ -152,42 +172,59 @@ export function MapaMilitantes({
             ← Volver al mapa nacional
           </button>
         )}
+        {nivel === "distritos" && (
+          <button
+            onClick={volverAMunicipios}
+            className="rounded-lg border border-institucional-600 px-3 py-1.5 text-sm font-medium text-institucional-700 hover:bg-institucional-50"
+          >
+            ← Volver a municipios de {provinciaSeleccionada?.nombre}
+          </button>
+        )}
       </div>
 
-      <div
-        className={`${aspecto ? `w-full ${aspecto}` : alto ?? (compacto ? "h-[380px]" : "h-[520px]")} overflow-hidden rounded-xl border border-gray-200`}
-      >
-        <MapContainer
-          center={[18.89, -70.16]}
-          zoom={8}
-          zoomSnap={0.001}
-          zoomDelta={0.25}
-          ref={mapRef}
-          style={{ height: "100%", width: "100%" }}
-          scrollWheelZoom={!compacto}
-          dragging={!compacto}
-          doubleClickZoom={!compacto}
-          touchZoom={!compacto}
-          boxZoom={!compacto}
-          keyboard={!compacto}
-          zoomControl={!compacto}
-          attributionControl={!compacto}
+      {nivel === "distritos" && geo && geo.features.length === 0 ? (
+        <div
+          className={`${aspecto ? `w-full ${aspecto}` : alto ?? (compacto ? "h-[380px]" : "h-[520px]")} flex items-center justify-center rounded-xl border border-dashed border-gray-300 bg-gray-50 p-6 text-center text-sm text-gray-400`}
         >
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
-          {geo && (
-            <GeoJSON
-              key={nivel + (provinciaSeleccionada?.id ?? "")}
-              ref={geoLayerRef}
-              data={geo}
-              style={estiloFeature}
-              onEachFeature={onEachFeature}
+          {municipioSeleccionado?.nombre} no tiene distritos municipales registrados — es un municipio sin
+          subdivisiones adicionales.
+        </div>
+      ) : (
+        <div
+          className={`${aspecto ? `w-full ${aspecto}` : alto ?? (compacto ? "h-[380px]" : "h-[520px]")} overflow-hidden rounded-xl border border-gray-200`}
+        >
+          <MapContainer
+            center={[18.89, -70.16]}
+            zoom={8}
+            zoomSnap={0.001}
+            zoomDelta={0.25}
+            ref={mapRef}
+            style={{ height: "100%", width: "100%" }}
+            scrollWheelZoom={!compacto}
+            dragging={!compacto}
+            doubleClickZoom={!compacto}
+            touchZoom={!compacto}
+            boxZoom={!compacto}
+            keyboard={!compacto}
+            zoomControl={!compacto}
+            attributionControl={!compacto}
+          >
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             />
-          )}
-        </MapContainer>
-      </div>
+            {geo && (
+              <GeoJSON
+                key={nivel + (provinciaSeleccionada?.id ?? "") + (municipioSeleccionado?.id ?? "")}
+                ref={geoLayerRef}
+                data={geo}
+                style={estiloFeature}
+                onEachFeature={onEachFeature}
+              />
+            )}
+          </MapContainer>
+        </div>
+      )}
 
       <div className="mt-3 flex items-center gap-4 text-xs text-gray-500">
         <span className="flex items-center gap-1">

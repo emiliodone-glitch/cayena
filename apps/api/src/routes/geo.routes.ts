@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { prisma, loadProvinciasGeo, loadMunicipiosGeo } from "@cayena/database";
+import { prisma, loadProvinciasGeo, loadMunicipiosGeo, loadDistritosMunicipalesGeo } from "@cayena/database";
 import { calcularEstadoAvance, calcularPorcentaje } from "@cayena/shared";
 import { asyncRoute } from "../middleware/errorHandler";
 
@@ -50,6 +50,18 @@ async function metasActivasPorMunicipio(): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   for (const m of metas) {
     if (m.municipioId && !map.has(m.municipioId)) map.set(m.municipioId, m.meta);
+  }
+  return map;
+}
+
+async function metasActivasPorDistritoMunicipal(): Promise<Map<string, number>> {
+  const metas = await prisma.metaMilitantes.findMany({
+    where: { distritoMunicipalId: { not: null } },
+    orderBy: { vigenciaDesde: "desc" },
+  });
+  const map = new Map<string, number>();
+  for (const m of metas) {
+    if (m.distritoMunicipalId && !map.has(m.distritoMunicipalId)) map.set(m.distritoMunicipalId, m.meta);
   }
   return map;
 }
@@ -112,6 +124,89 @@ geoRouter.get(
         ...f,
         properties: {
           ...f.properties,
+          militantesCaptados: captados,
+          meta,
+          porcentaje: calcularPorcentaje(captados, meta),
+          estado: calcularEstadoAvance(captados, meta),
+        },
+      };
+    });
+
+    res.json({ type: "FeatureCollection", features });
+  }),
+);
+
+function normalizarDM(s: string): string {
+  return s
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^A-Za-z0-9 ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+}
+
+function sinArticulo(s: string): string {
+  let out = s;
+  for (let i = 0; i < 2; i++) {
+    out = out.replace(/^(EL|LA|LOS|LAS|DE|DEL)\s+/, "");
+  }
+  return out;
+}
+
+// GET /geo/municipios/:municipioId/distritos-municipales — drill-down de tercer nivel.
+// El geojson solo trae nombre + geometría (sin id de base de datos: sería un cuid
+// fijo de un entorno específico y no tendría sentido en otro). Cada feature se
+// resuelve/crea aquí contra la tabla real DistritoMunicipal, igual que el resto
+// del catálogo geográfico gestionado desde el back office.
+geoRouter.get(
+  "/municipios/:municipioId/distritos-municipales",
+  asyncRoute(async (req, res) => {
+    const { municipioId } = req.params;
+    const geo = loadDistritosMunicipalesGeo();
+    const featuresMuni = geo.features.filter((f) => f.properties?.municipioId === municipioId);
+
+    const existentes = await prisma.distritoMunicipal.findMany({ where: { municipioId } });
+    const porNombreExacto = new Map(existentes.map((d) => [normalizarDM(d.nombre), d]));
+    const porNombreSinArticulo = new Map<string, (typeof existentes)[number]>();
+    for (const d of existentes) {
+      const key = sinArticulo(normalizarDM(d.nombre));
+      if (!porNombreSinArticulo.has(key)) porNombreSinArticulo.set(key, d);
+    }
+
+    const resueltos = await Promise.all(
+      featuresMuni.map(async (f) => {
+        const nombre = String(f.properties?.nombre ?? "");
+        const exacto = porNombreExacto.get(normalizarDM(nombre));
+        const suelto = porNombreSinArticulo.get(sinArticulo(normalizarDM(nombre)));
+        let distrito = exacto ?? suelto;
+        if (!distrito) {
+          distrito = await prisma.distritoMunicipal.create({ data: { municipioId, nombre } });
+        }
+        return { feature: f, distrito };
+      }),
+    );
+
+    const distritoIds = resueltos.map((r) => r.distrito.id);
+    const [conteos, metas] = await Promise.all([
+      prisma.militante.groupBy({
+        by: ["distritoMunicipalId"],
+        where: { distritoMunicipalId: { in: distritoIds } },
+        _count: { _all: true },
+      }),
+      metasActivasPorDistritoMunicipal(),
+    ]);
+    const conteoMap = new Map(conteos.map((c) => [c.distritoMunicipalId, c._count._all]));
+
+    const features = resueltos.map(({ feature, distrito }) => {
+      const captados = conteoMap.get(distrito.id) ?? 0;
+      const meta = metas.get(distrito.id) ?? 0;
+      return {
+        ...feature,
+        properties: {
+          ...feature.properties,
+          id: distrito.id,
+          nombre: distrito.nombre,
           militantesCaptados: captados,
           meta,
           porcentaje: calcularPorcentaje(captados, meta),
