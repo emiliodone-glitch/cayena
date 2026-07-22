@@ -66,8 +66,35 @@ async function corregirMunicipios() {
   console.log("Municipios faltantes verificados/creados:", faltantes.length);
 }
 
+// La conexión pública contra Railway a veces se corta a mitad de la corrida
+// (red inestable del lado del cliente). Como cada operación es de
+// buscar-o-crear (idempotente), es seguro reintentar: en vez de morir el
+// proceso entero, espera, reconecta y repite solo lo que falló.
+function esErrorDeConexion(e: unknown): boolean {
+  return e instanceof Error && /Can't reach database server|P1001|P1017|Timed out/i.test(e.message);
+}
+
+async function conReintentos<T>(fn: () => Promise<T>, intentos = 8): Promise<T> {
+  for (let intento = 1; intento <= intentos; intento++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (!esErrorDeConexion(e) || intento === intentos) throw e;
+      const espera = Math.min(2000 * intento, 15000);
+      console.warn(`  (corte de conexión, reintentando en ${espera}ms — intento ${intento}/${intentos})`);
+      await new Promise((res) => setTimeout(res, espera));
+      try {
+        await prisma.$connect();
+      } catch {
+        // seguirá fallando y se reintentará en la próxima vuelta
+      }
+    }
+  }
+  throw new Error("inalcanzable");
+}
+
 async function main() {
-  await corregirMunicipios();
+  await conReintentos(() => corregirMunicipios());
 
   const raw = fs.readFileSync(path.join(__dirname, "..", "data", "jce-recintos-colegios-2024.json"), "utf-8");
   const records: JceRecord[] = JSON.parse(raw);
@@ -115,18 +142,18 @@ async function main() {
   const localidadCache = new Map<string, string>(); // `${municipioId}::${nombreNorm}` -> id
   const recintoCache = new Map<string, string>(); // `${localidadId}::${nombreNorm}` -> id
 
-  for (const r of records) {
+  async function procesarRegistro(r: JceRecord) {
     const provinciaNorm = norm(r.provincia);
     const provinciaId = provinciaIdByNorm.get(provinciaNorm);
     if (!provinciaId) {
       noProvincia++;
-      continue;
+      return;
     }
     const municipio = findMunicipio(provinciaNorm, provinciaId, r.municipio);
     if (!municipio) {
       noMunicipio++;
       console.warn("Municipio no encontrado:", r.provincia, "|", r.municipio);
-      continue;
+      return;
     }
     const municipioId = municipio.id;
 
@@ -223,6 +250,10 @@ async function main() {
 
     procesados++;
     if (procesados % 500 === 0) console.log(`  ...${procesados}/${records.length}`);
+  }
+
+  for (const r of records) {
+    await conReintentos(() => procesarRegistro(r));
   }
 
   console.log("\n=== RESUMEN ===");
