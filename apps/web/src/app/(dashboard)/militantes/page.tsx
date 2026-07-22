@@ -40,6 +40,9 @@ export default function MilitantesPage() {
   const [demarcacion, setDemarcacion] = useState<DemarcacionSeleccionada | null>(null);
   const [drawerAbierto, setDrawerAbierto] = useState(false);
   const [importarAbierto, setImportarAbierto] = useState(false);
+  // Fuerza al mapa a refrescar sus conteos/colores tras registrar o importar
+  // militantes, sin perder el nivel de zoom/demarcación en el que está el mapa.
+  const [refreshMapa, setRefreshMapa] = useState(0);
 
   function cargar() {
     const params = new URLSearchParams();
@@ -55,6 +58,11 @@ export default function MilitantesPage() {
     }
     const qs = params.toString();
     apiFetch<MilitanteRow[]>(`/militantes${qs ? `?${qs}` : ""}`).then(setMilitantes).catch(() => setMilitantes([]));
+  }
+
+  function recargarTodo() {
+    cargar();
+    setRefreshMapa((t) => t + 1);
   }
 
   useEffect(cargar, [q, demarcacion?.tipo, demarcacion?.id]);
@@ -119,7 +127,12 @@ export default function MilitantesPage() {
         <>
           <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
             <div className="mx-auto max-w-[1100px]">
-              <MapaMilitantes compacto aspecto="aspect-[1000/850]" onDemarcacionChange={setDemarcacion} />
+              <MapaMilitantes
+                compacto
+                aspecto="aspect-[1000/850]"
+                onDemarcacionChange={setDemarcacion}
+                refreshToken={refreshMapa}
+              />
             </div>
           </div>
 
@@ -208,14 +221,14 @@ export default function MilitantesPage() {
         <MilitanteForm
           onSaved={() => {
             setDrawerAbierto(false);
-            cargar();
+            recargarTodo();
           }}
           onCancel={() => setDrawerAbierto(false)}
         />
       </Drawer>
 
       <Drawer open={importarAbierto} onClose={() => setImportarAbierto(false)} title="Importar militantes (CSV)">
-        <ImportarMilitantesCSV onImportado={cargar} />
+        <ImportarMilitantesCSV onImportado={recargarTodo} />
       </Drawer>
     </div>
   );

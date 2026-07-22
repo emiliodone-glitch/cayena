@@ -116,6 +116,7 @@ export default function DashboardPage() {
   const [drawerObra, setDrawerObra] = useState(false);
   const [drawerActividad, setDrawerActividad] = useState(false);
   const [drawerMilitante, setDrawerMilitante] = useState(false);
+  const [refreshMapa, setRefreshMapa] = useState(0);
 
   const cargar = useCallback(() => {
     setRefrescando(true);
@@ -332,7 +333,7 @@ export default function DashboardPage() {
           KPIs y gráficas de abajo, no cambia según el período seleccionado arriba.
         </p>
         <div className="mx-auto max-w-[1100px]">
-          <MapaMilitantes compacto aspecto="aspect-[1000/850]" />
+          <MapaMilitantes compacto aspecto="aspect-[1000/850]" refreshToken={refreshMapa} />
         </div>
       </div>
 
@@ -416,7 +417,13 @@ export default function DashboardPage() {
       </div>
 
       <Drawer open={drawerMilitante} onClose={() => setDrawerMilitante(false)} title="Registrar militante">
-        <MilitanteForm onSaved={() => onGuardadoRapido("Militante registrado")} onCancel={() => setDrawerMilitante(false)} />
+        <MilitanteForm
+          onSaved={() => {
+            onGuardadoRapido("Militante registrado");
+            setRefreshMapa((t) => t + 1);
+          }}
+          onCancel={() => setDrawerMilitante(false)}
+        />
       </Drawer>
       <Drawer open={drawerActividad} onClose={() => setDrawerActividad(false)} title="Nueva actividad">
         <ActividadForm onSaved={() => onGuardadoRapido("Actividad creada")} onCancel={() => setDrawerActividad(false)} />

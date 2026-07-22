@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { MapContainer, GeoJSON, TileLayer } from "react-leaflet";
-import type { Map as LeafletMap, Layer, LeafletMouseEvent } from "leaflet";
+import type { Map as LeafletMap, Layer } from "leaflet";
 import * as L from "leaflet";
 import type { Feature, FeatureCollection } from "geojson";
 import { COLOR_ESTADO, type EstadoAvance } from "@cayena/shared";
@@ -34,6 +34,7 @@ export function MapaMilitantes({
   alto,
   aspecto,
   onDemarcacionChange,
+  refreshToken = 0,
 }: {
   compacto?: boolean;
   /** Clase Tailwind de altura fija (ej. "h-[520px]"). Ignorada si se pasa `aspecto`. */
@@ -41,9 +42,14 @@ export function MapaMilitantes({
   /** Clase Tailwind de aspect-ratio (ej. "aspect-[1000/850]") para que el mapa escale
    * de forma responsiva con el ancho del contenedor en vez de usar una altura fija. */
   aspecto?: string;
-  /** Se dispara al pasar el cursor sobre una demarcación (o al volver atrás,
-   * con `null`), para que el padrón de militantes debajo del mapa se filtre. */
+  /** Se dispara al pasar el cursor o hacer clic sobre una demarcación (o al
+   * volver atrás, con `null`), para que el padrón de militantes debajo del
+   * mapa se filtre. */
   onDemarcacionChange?: (sel: DemarcacionSeleccionada | null) => void;
+  /** Incrementar este valor fuerza un refetch de la capa actual (mismo nivel
+   * y demarcación seleccionada) sin resetear el drill-down — úsalo tras
+   * registrar/importar militantes para que el mapa refleje el cambio. */
+  refreshToken?: number;
 }) {
   const [nivel, setNivel] = useState<"nacional" | "municipios" | "distritos">("nacional");
   const [provinciaSeleccionada, setProvinciaSeleccionada] = useState<{ id: string; nombre: string } | null>(
@@ -57,6 +63,11 @@ export function MapaMilitantes({
   const [loading, setLoading] = useState(true);
   const mapRef = useRef<LeafletMap | null>(null);
   const geoLayerRef = useRef<L.GeoJSON | null>(null);
+  // Mapa de elemento DOM -> layer de Leaflet, reconstruido cada vez que se
+  // (re)monta la capa GeoJSON. Ver el efecto de más abajo que hace el
+  // hit-testing manual sobre `mousemove` para saber por qué hace falta.
+  const elementLayerRef = useRef(new Map<Element, L.Path>());
+  const resaltadoRef = useRef<L.Path | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -65,6 +76,10 @@ export function MapaMilitantes({
     // falta que cambie el `key`. Limpiamos `geo` aquí para que el layer viejo
     // se desmonte de inmediato y el nuevo se monte fresco cuando llegue el fetch.
     setGeo(null);
+    // El layer viejo se desmonta ya — soltar la referencia ahora mismo evita
+    // que un mousemove en el hueco entre niveles intente llamar setStyle()
+    // sobre un layer de Leaflet ya destruido.
+    resaltadoRef.current = null;
     const path =
       nivel === "nacional"
         ? "/geo/provincias"
@@ -74,11 +89,23 @@ export function MapaMilitantes({
     apiFetch<FeatureCollection>(path)
       .then((data) => {
         setGeo(data);
-        setPanel(null);
+        // No reseteamos el panel a null aquí: si ya había una demarcación
+        // seleccionada (por clic, no solo hover) se mantiene visible al
+        // entrar a un nivel más profundo, y si esto es un refresco (mismo
+        // nivel, nuevo refreshToken tras registrar/importar militantes) se
+        // actualizan sus números con los datos frescos en vez de perderla.
+        setPanel((prev) => {
+          if (!prev) return prev;
+          const encontrada = data.features.find((f) => {
+            const p = f.properties as Propiedades;
+            return prev.id ? p.id === prev.id : !p.id && p.nombre === prev.nombre;
+          });
+          return encontrada ? (encontrada.properties as Propiedades) : prev;
+        });
       })
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nivel, provinciaSeleccionada?.id, municipioSeleccionado?.id]);
+  }, [nivel, provinciaSeleccionada?.id, municipioSeleccionado?.id, refreshToken]);
 
   useEffect(() => {
     if (!geo) return;
@@ -111,11 +138,55 @@ export function MapaMilitantes({
     // en cada resize (si no, un contenedor más chico podría recortar el
     // territorio en vez de solo dejar menos margen).
     window.addEventListener("resize", encuadrar);
+
+    // Reconstruye el mapa elemento-DOM -> layer para el hit-testing manual de
+    // más abajo (los <path> son nuevos cada vez que cambia `geo`).
+    elementLayerRef.current = new Map();
+    geoLayerRef.current?.eachLayer((layer) => {
+      const path = layer as L.Path;
+      const el = path.getElement?.();
+      if (el) elementLayerRef.current.set(el, path);
+    });
+    resaltadoRef.current = null;
+
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", encuadrar);
     };
   }, [geo]);
+
+  // Detecta la demarcación bajo el cursor a partir de mousemove reales
+  // (nunca sintéticos) en vez de los eventos mouseover/mouseout por-path de
+  // Leaflet: el navegador dispara un mouseover "fantasma" sobre lo que sea
+  // que quede bajo un cursor quieto en cuanto el contenido de abajo cambia
+  // sin que el mouse se haya movido de verdad — al entrar a un nivel más
+  // profundo (remonta el GeoJSON), al refrescar tras registrar/importar
+  // militantes (mismo remonte) o al cerrarse el drawer de registro (revela
+  // el mapa que quedaba debajo) — y ese eco pisaba la demarcación recién
+  // seleccionada. Un `mousemove` real, en cambio, solo ocurre cuando el
+  // cursor se mueve de verdad, así que basar todo en él elimina la clase
+  // entera de "hover fantasma" sin depender de heurísticas de tiempo/posición.
+  useEffect(() => {
+    function onMouseMove(e: MouseEvent) {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const layer = el ? elementLayerRef.current.get(el) : undefined;
+      const anterior = resaltadoRef.current;
+      if (layer === anterior) return;
+      if (anterior) anterior.setStyle({ weight: 1.2, color: "#ffffff" });
+      if (layer) {
+        layer.setStyle({ weight: 3, color: "#123f1c" });
+        const props = (layer as unknown as { feature?: Feature }).feature?.properties as Propiedades | undefined;
+        if (props) {
+          setPanel(props);
+          avisarDemarcacion(props);
+        }
+      }
+      resaltadoRef.current = layer ?? null;
+    }
+    window.addEventListener("mousemove", onMouseMove);
+    return () => window.removeEventListener("mousemove", onMouseMove);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nivel, municipioSeleccionado?.id, onDemarcacionChange]);
 
   function estiloFeature(feature?: Feature) {
     const estado = (feature?.properties as Propiedades | undefined)?.estado ?? "rojo";
@@ -142,25 +213,27 @@ export function MapaMilitantes({
 
   function onEachFeature(feature: Feature, layer: Layer) {
     const props = feature.properties as Propiedades;
+    // El hover (mouseover/mouseout por-path de Leaflet) ya no se maneja acá
+    // — ver el efecto de mousemove más arriba — porque es susceptible al
+    // "hover fantasma" que dispara el navegador cuando el contenido bajo un
+    // cursor quieto cambia sin que el mouse se haya movido de verdad. El
+    // clic, en cambio, siempre es una acción real y deliberada del usuario
+    // (requiere mousedown+mouseup), así que se queda con su propio listener.
     layer.on({
-      mouseover: (e: LeafletMouseEvent) => {
+      click: () => {
+        // Fijar panel + demarcación de inmediato con los datos ya disponibles
+        // del feature clicado (no depende de que el hover haya disparado
+        // antes, lo cual es clave en pantallas táctiles) — así, al entrar a
+        // un nivel más profundo, el total/lista de la demarcación recién
+        // seleccionada queda visible sin esperar a un nuevo hover.
         setPanel(props);
         avisarDemarcacion(props);
-        (e.target as L.Path).setStyle({ weight: 3, color: "#123f1c" });
-      },
-      mouseout: (e: LeafletMouseEvent) => {
-        (e.target as L.Path).setStyle({ weight: 1.2, color: "#ffffff" });
-      },
-      click: () => {
         if (nivel === "nacional") {
           setProvinciaSeleccionada({ id: props.id, nombre: props.nombre });
           setNivel("municipios");
         } else if (nivel === "municipios") {
           setMunicipioSeleccionado({ id: props.id, nombre: props.nombre });
           setNivel("distritos");
-        } else {
-          setPanel(props);
-          avisarDemarcacion(props);
         }
       },
     });
@@ -244,7 +317,7 @@ export function MapaMilitantes({
             />
             {geo && (
               <GeoJSON
-                key={nivel + (provinciaSeleccionada?.id ?? "") + (municipioSeleccionado?.id ?? "")}
+                key={nivel + (provinciaSeleccionada?.id ?? "") + (municipioSeleccionado?.id ?? "") + refreshToken}
                 ref={geoLayerRef}
                 data={geo}
                 style={estiloFeature}
