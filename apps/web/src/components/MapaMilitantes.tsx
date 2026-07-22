@@ -21,10 +21,19 @@ type Propiedades = {
 
 type PanelInfo = Propiedades | null;
 
+export type DemarcacionSeleccionada =
+  | { tipo: "provincia"; id: string; nombre: string }
+  | { tipo: "municipio"; id: string; nombre: string }
+  | { tipo: "distrito"; id: string; nombre: string }
+  // Área central de un municipio sin distrito municipal propio (la "cabecera"
+  // del mapa de distritos): se filtra por municipioId + sin distrito asignado.
+  | { tipo: "municipio-sin-distrito"; id: string; nombre: string };
+
 export function MapaMilitantes({
   compacto = false,
   alto,
   aspecto,
+  onDemarcacionChange,
 }: {
   compacto?: boolean;
   /** Clase Tailwind de altura fija (ej. "h-[520px]"). Ignorada si se pasa `aspecto`. */
@@ -32,6 +41,9 @@ export function MapaMilitantes({
   /** Clase Tailwind de aspect-ratio (ej. "aspect-[1000/850]") para que el mapa escale
    * de forma responsiva con el ancho del contenedor en vez de usar una altura fija. */
   aspecto?: string;
+  /** Se dispara al pasar el cursor sobre una demarcación (o al volver atrás,
+   * con `null`), para que el padrón de militantes debajo del mapa se filtre. */
+  onDemarcacionChange?: (sel: DemarcacionSeleccionada | null) => void;
 }) {
   const [nivel, setNivel] = useState<"nacional" | "municipios" | "distritos">("nacional");
   const [provinciaSeleccionada, setProvinciaSeleccionada] = useState<{ id: string; nombre: string } | null>(
@@ -115,11 +127,25 @@ export function MapaMilitantes({
     };
   }
 
+  function avisarDemarcacion(props: Propiedades) {
+    if (!onDemarcacionChange) return;
+    if (nivel === "nacional") {
+      onDemarcacionChange({ tipo: "provincia", id: props.id, nombre: props.nombre });
+    } else if (nivel === "municipios") {
+      onDemarcacionChange({ tipo: "municipio", id: props.id, nombre: props.nombre });
+    } else if (props.id) {
+      onDemarcacionChange({ tipo: "distrito", id: props.id, nombre: props.nombre });
+    } else if (municipioSeleccionado) {
+      onDemarcacionChange({ tipo: "municipio-sin-distrito", id: municipioSeleccionado.id, nombre: props.nombre });
+    }
+  }
+
   function onEachFeature(feature: Feature, layer: Layer) {
     const props = feature.properties as Propiedades;
     layer.on({
       mouseover: (e: LeafletMouseEvent) => {
         setPanel(props);
+        avisarDemarcacion(props);
         (e.target as L.Path).setStyle({ weight: 3, color: "#123f1c" });
       },
       mouseout: (e: LeafletMouseEvent) => {
@@ -134,6 +160,7 @@ export function MapaMilitantes({
           setNivel("distritos");
         } else {
           setPanel(props);
+          avisarDemarcacion(props);
         }
       },
     });
@@ -144,12 +171,14 @@ export function MapaMilitantes({
     setProvinciaSeleccionada(null);
     setMunicipioSeleccionado(null);
     setPanel(null);
+    onDemarcacionChange?.(null);
   }
 
   function volverAMunicipios() {
     setNivel("municipios");
     setMunicipioSeleccionado(null);
     setPanel(null);
+    onDemarcacionChange?.(null);
   }
 
   return (

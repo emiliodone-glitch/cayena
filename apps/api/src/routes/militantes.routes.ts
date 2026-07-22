@@ -113,6 +113,10 @@ militantesRouter.get(
 const querySchema = z.object({
   provinciaId: z.string().optional(),
   municipioId: z.string().optional(),
+  distritoMunicipalId: z.string().optional(),
+  // Filtra militantes de la "cabecera" de un municipio (sin distrito municipal
+  // asignado) cuando se pasa junto con municipioId — ver nivel "distritos" del mapa.
+  sinDistritoMunicipal: z.enum(["true"]).optional(),
   desde: z.string().optional(),
   hasta: z.string().optional(),
   q: z.string().optional(),
@@ -122,7 +126,8 @@ const querySchema = z.object({
 militantesRouter.get(
   "/",
   asyncRoute(async (req, res) => {
-    const { provinciaId, municipioId, desde, hasta, q } = querySchema.parse(req.query);
+    const { provinciaId, municipioId, distritoMunicipalId, sinDistritoMunicipal, desde, hasta, q } =
+      querySchema.parse(req.query);
     const fechaFilter: Record<string, Date> = {};
     if (desde) fechaFilter.gte = new Date(desde);
     if (hasta) fechaFilter.lte = new Date(hasta);
@@ -131,6 +136,8 @@ militantesRouter.get(
       where: {
         ...(provinciaId ? { provinciaId } : {}),
         ...(municipioId ? { municipioId } : {}),
+        ...(distritoMunicipalId ? { distritoMunicipalId } : {}),
+        ...(sinDistritoMunicipal === "true" ? { distritoMunicipalId: null } : {}),
         ...(Object.keys(fechaFilter).length ? { createdAt: fechaFilter } : {}),
         ...(q
           ? {
@@ -145,6 +152,9 @@ militantesRouter.get(
       include: {
         provincia: { select: { nombre: true } },
         municipio: { select: { nombre: true } },
+        localidad: { select: { nombre: true } },
+        recintoElectoral: { select: { nombre: true } },
+        colegio: { select: { numero: true } },
         capturadoPor: { select: { nombre: true } },
       },
       orderBy: { createdAt: "desc" },

@@ -12,6 +12,7 @@ import { MilitanteForm } from "@/components/forms/MilitanteForm";
 import { MetasEditor } from "@/components/MetasEditor";
 import { ImportarMilitantesCSV } from "@/components/ImportarMilitantesCSV";
 import { DistritosMunicipales } from "@/components/DistritosMunicipales";
+import type { DemarcacionSeleccionada } from "@/components/MapaMilitantes";
 
 const MapaMilitantes = dynamic(
   () => import("@/components/MapaMilitantes").then((m) => m.MapaMilitantes),
@@ -25,6 +26,9 @@ type MilitanteRow = {
   telefono: string | null;
   provincia: { nombre: string };
   municipio: { nombre: string };
+  localidad: { nombre: string } | null;
+  recintoElectoral: { nombre: string } | null;
+  colegio: { numero: string } | null;
   createdAt: string;
 };
 
@@ -33,15 +37,27 @@ export default function MilitantesPage() {
   const [tab, setTab] = useState<"mapa" | "metas" | "distritos">("mapa");
   const [militantes, setMilitantes] = useState<MilitanteRow[] | null>(null);
   const [q, setQ] = useState("");
+  const [demarcacion, setDemarcacion] = useState<DemarcacionSeleccionada | null>(null);
   const [drawerAbierto, setDrawerAbierto] = useState(false);
   const [importarAbierto, setImportarAbierto] = useState(false);
 
   function cargar() {
-    const params = q ? `?q=${encodeURIComponent(q)}` : "";
-    apiFetch<MilitanteRow[]>(`/militantes${params}`).then(setMilitantes).catch(() => setMilitantes([]));
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (demarcacion) {
+      if (demarcacion.tipo === "provincia") params.set("provinciaId", demarcacion.id);
+      else if (demarcacion.tipo === "municipio") params.set("municipioId", demarcacion.id);
+      else if (demarcacion.tipo === "distrito") params.set("distritoMunicipalId", demarcacion.id);
+      else {
+        params.set("municipioId", demarcacion.id);
+        params.set("sinDistritoMunicipal", "true");
+      }
+    }
+    const qs = params.toString();
+    apiFetch<MilitanteRow[]>(`/militantes${qs ? `?${qs}` : ""}`).then(setMilitantes).catch(() => setMilitantes([]));
   }
 
-  useEffect(cargar, [q]);
+  useEffect(cargar, [q, demarcacion?.tipo, demarcacion?.id]);
 
   return (
     <div>
@@ -103,13 +119,27 @@ export default function MilitantesPage() {
         <>
           <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
             <div className="mx-auto max-w-[1100px]">
-              <MapaMilitantes compacto aspecto="aspect-[1000/850]" />
+              <MapaMilitantes compacto aspecto="aspect-[1000/850]" onDemarcacionChange={setDemarcacion} />
             </div>
           </div>
 
           <div className="mt-8">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-gray-700">Padrón de militantes</h2>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold text-gray-700">Padrón de militantes</h2>
+                {demarcacion && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-institucional-50 px-2.5 py-1 text-xs font-medium text-institucional-700">
+                    {demarcacion.nombre}
+                    <button
+                      onClick={() => setDemarcacion(null)}
+                      className="text-institucional-400 hover:text-institucional-700"
+                      aria-label="Quitar filtro de demarcación"
+                    >
+                      ×
+                    </button>
+                  </span>
+                )}
+              </div>
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
@@ -117,10 +147,16 @@ export default function MilitantesPage() {
                 className="w-72 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-institucional-600 focus:outline-none"
               />
             </div>
+            {demarcacion && (
+              <p className="mb-2 text-xs text-gray-400">
+                Mostrando el padrón de <span className="font-medium text-gray-600">{demarcacion.nombre}</span> —
+                pasa el cursor sobre otra demarcación del mapa para cambiarlo.
+              </p>
+            )}
             {militantes === null ? (
-              <TableSkeleton cols={6} />
+              <TableSkeleton cols={8} />
             ) : (
-              <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+              <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
                 <table className="w-full text-left text-sm">
                   <thead className="bg-gray-50 text-xs uppercase text-gray-400">
                     <tr>
@@ -129,6 +165,8 @@ export default function MilitantesPage() {
                       <th className="px-4 py-2">Teléfono</th>
                       <th className="px-4 py-2">Provincia</th>
                       <th className="px-4 py-2">Municipio</th>
+                      <th className="px-4 py-2">Localidad</th>
+                      <th className="px-4 py-2">Recinto / Mesa</th>
                       <th className="px-4 py-2">Registrado</th>
                     </tr>
                   </thead>
@@ -140,6 +178,12 @@ export default function MilitantesPage() {
                         <td className="px-4 py-2">{m.telefono ?? "—"}</td>
                         <td className="px-4 py-2">{m.provincia.nombre}</td>
                         <td className="px-4 py-2">{m.municipio.nombre}</td>
+                        <td className="px-4 py-2">{m.localidad?.nombre ?? "—"}</td>
+                        <td className="px-4 py-2">
+                          {m.recintoElectoral
+                            ? `${m.recintoElectoral.nombre}${m.colegio ? ` · Mesa ${m.colegio.numero}` : ""}`
+                            : "—"}
+                        </td>
                         <td className="px-4 py-2 text-gray-400">
                           {new Date(m.createdAt).toLocaleDateString("es-DO")}
                         </td>
@@ -147,7 +191,7 @@ export default function MilitantesPage() {
                     ))}
                     {militantes.length === 0 && (
                       <tr>
-                        <td colSpan={6} className="px-4 py-6 text-center text-gray-400">
+                        <td colSpan={8} className="px-4 py-6 text-center text-gray-400">
                           Sin resultados.
                         </td>
                       </tr>
