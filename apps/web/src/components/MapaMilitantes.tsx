@@ -68,16 +68,6 @@ type ResumenDemarcacion = {
 
 const COLOR_SIN_DATO = "#d1d5db";
 
-// El semáforo rojo/amarillo/verde es el clásico problema de accesibilidad
-// para daltonismo (confusión rojo-verde, la más común): estos símbolos dan
-// una segunda señal independiente del color, en la etiqueta del mapa, la
-// leyenda, el panel y el ranking.
-const SIMBOLO_ESTADO: Record<EstadoAvance, string> = {
-  rojo: "✕",
-  amarillo: "◐",
-  verde: "✓",
-};
-
 // Escala de verdes para el modo "penetración electoral" (captados/electores):
 // más oscuro = mayor porcentaje del electorado captado.
 function colorPenetracion(p: number | null | undefined): string {
@@ -102,6 +92,144 @@ function medirTexto(texto: string): number {
     if (contextoMedicion) contextoMedicion.font = "600 11px system-ui, sans-serif";
   }
   return contextoMedicion?.measureText(texto).width ?? texto.length * 7;
+}
+
+// Aplana Polygon/MultiPolygon a su lista de anillos (coordenadas [lng, lat]).
+function anillosDe(f: Feature): number[][][] {
+  const g = f.geometry as Polygon | MultiPolygon;
+  if (g.type === "Polygon") return g.coordinates as number[][][];
+  return (g.coordinates as number[][][][]).flat();
+}
+
+// Área con signo (fórmula del shoelace) — solo se usa el valor absoluto para
+// comparar tamaños, así que no importa el sentido de giro del anillo.
+function areaAnillo(anillo: number[][]): number {
+  let area = 0;
+  for (let i = 0; i < anillo.length - 1; i++) {
+    const [x0, y0] = anillo[i];
+    const [x1, y1] = anillo[i + 1];
+    area += x0 * y1 - x1 * y0;
+  }
+  return area / 2;
+}
+
+function centroideAnillo(anillo: number[][]): [number, number] {
+  let area = 0,
+    cx = 0,
+    cy = 0;
+  for (let i = 0; i < anillo.length - 1; i++) {
+    const [x0, y0] = anillo[i];
+    const [x1, y1] = anillo[i + 1];
+    const cruce = x0 * y1 - x1 * y0;
+    area += cruce;
+    cx += (x0 + x1) * cruce;
+    cy += (y0 + y1) * cruce;
+  }
+  area /= 2;
+  if (Math.abs(area) < 1e-12) {
+    // Anillo degenerado (área ~0): promedio simple como respaldo.
+    const n = Math.max(1, anillo.length - 1);
+    const sx = anillo.slice(0, -1).reduce((s, p) => s + p[0], 0) / n;
+    const sy = anillo.slice(0, -1).reduce((s, p) => s + p[1], 0) / n;
+    return [sx, sy];
+  }
+  return [cx / (6 * area), cy / (6 * area)];
+}
+
+function dentroDelAnillo(x: number, y: number, anillo: number[][]): boolean {
+  // Ray casting estándar: cuenta cruces de una semirrecta horizontal desde el punto.
+  let dentro = false;
+  for (let i = 0, j = anillo.length - 2; i < anillo.length - 1; j = i++) {
+    const [xi, yi] = anillo[i];
+    const [xj, yj] = anillo[j];
+    const cruza = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
+    if (cruza) dentro = !dentro;
+  }
+  return dentro;
+}
+
+function distanciaPuntoASegmento(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const largo2 = dx * dx + dy * dy;
+  let t = largo2 > 0 ? ((px - x1) * dx + (py - y1) * dy) / largo2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const ex = x1 + t * dx;
+  const ey = y1 + t * dy;
+  return Math.hypot(px - ex, py - ey);
+}
+
+function distanciaAlBorde(x: number, y: number, anillo: number[][]): number {
+  let min = Infinity;
+  for (let i = 0; i < anillo.length - 1; i++) {
+    const [x1, y1] = anillo[i];
+    const [x2, y2] = anillo[i + 1];
+    const d = distanciaPuntoASegmento(x, y, x1, y1, x2, y2);
+    if (d < min) min = d;
+  }
+  return min;
+}
+
+// El centroide de área de un anillo puede caer fuera del territorio (o en
+// una parte angosta/una bahía) cuando la forma es alargada o cóncava — que
+// es justo el caso de varias provincias de RD con penínsulas finas. En vez
+// de eso, se busca por cuadrícula el punto que está DENTRO del anillo y más
+// alejado de cualquier borde (una versión simple de "polo de inaccesibilidad"),
+// que es donde de verdad cabe cómodamente el nombre de la demarcación.
+function puntoMasInterior(anillo: number[][]): [number, number] {
+  let minX = Infinity,
+    maxX = -Infinity,
+    minY = Infinity,
+    maxY = -Infinity;
+  for (const [x, y] of anillo) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  const PASOS = 28;
+  let mejor: [number, number] | null = null;
+  let mejorDist = -Infinity;
+  for (let i = 0; i <= PASOS; i++) {
+    const x = minX + ((maxX - minX) * i) / PASOS;
+    for (let j = 0; j <= PASOS; j++) {
+      const y = minY + ((maxY - minY) * j) / PASOS;
+      if (!dentroDelAnillo(x, y, anillo)) continue;
+      const d = distanciaAlBorde(x, y, anillo);
+      if (d > mejorDist) {
+        mejorDist = d;
+        mejor = [x, y];
+      }
+    }
+  }
+  // Respaldo si la cuadrícula no cayó ningún punto adentro (forma muy fina):
+  // el centroide de área, aunque no sea perfecto, sigue siendo razonable.
+  return mejor ?? centroideAnillo(anillo);
+}
+
+// Leaflet centra el tooltip "direction: center" con el centroide de TODOS
+// los anillos de la geometría tratados como un solo polígono con huecos —
+// para una provincia con una isla separada del territorio principal (un
+// cayo lejos de la costa), eso puede ubicar la etiqueta sobre la isla o en
+// el mar entre ambas partes. Acá primero se descarta la isla quedándose con
+// el anillo de mayor área (el territorio principal) y luego se ubica el
+// punto más "adentro" de esa forma (ver puntoMasInterior), no solo su
+// centro de masa — importante porque varias provincias tienen penínsulas
+// finas donde el centro de masa cae en agua o en la parte angosta.
+function centroideMayorAnillo(f: Feature): [number, number] | null {
+  const anillos = anillosDe(f);
+  if (anillos.length === 0) return null;
+  let mejor = anillos[0];
+  let mejorArea = Math.abs(areaAnillo(mejor));
+  for (const anillo of anillos.slice(1)) {
+    const area = Math.abs(areaAnillo(anillo));
+    if (area > mejorArea) {
+      mejor = anillo;
+      mejorArea = area;
+    }
+  }
+  const [lng, lat] = puntoMasInterior(mejor);
+  return [lat, lng];
 }
 
 function construirQueryFiltros(f: FiltrosMapa): string {
@@ -333,12 +461,24 @@ export function MapaMilitantes({
       const layer = geoLayerRef.current;
       if (!map || !layer) return;
 
-      type Candidato = { path: L.Path; area: number; cx: number; cy: number; ancho: number; alto: number };
+      type Candidato = {
+        path: L.Path;
+        ancla: L.LatLngExpression;
+        area: number;
+        cx: number;
+        cy: number;
+        ancho: number;
+        alto: number;
+      };
       const candidatos: Candidato[] = [];
       const descartados: L.Path[] = [];
 
       layer.eachLayer((l) => {
-        const path = l as L.Path & { getBounds?: () => L.LatLngBounds; feature?: Feature };
+        const path = l as L.Path & {
+          getBounds?: () => L.LatLngBounds;
+          feature?: Feature;
+          anclaEtiqueta?: L.LatLngExpression;
+        };
         if (!path.getBounds) return;
         const b = path.getBounds();
         const p1 = map.latLngToContainerPoint(b.getNorthWest());
@@ -349,14 +489,23 @@ export function MapaMilitantes({
           descartados.push(path);
           return;
         }
-        const texto = path.getTooltip()?.getContent();
+        const tooltip = path.getTooltip();
+        const texto = tooltip?.getContent();
         const nombreFeature = (path.feature?.properties as Propiedades | undefined)?.nombre ?? "";
         const anchoTexto = medirTexto(typeof texto === "string" ? texto : nombreFeature);
+        // El ancla real de la etiqueta (el punto más "adentro" del territorio
+        // principal, ver centroideMayorAnillo) puede quedar lejos del centro
+        // del bounding box en provincias con islas o penínsulas finas — hay
+        // que medir la colisión en el punto donde el rótulo realmente se
+        // dibuja, no en el centro del bbox.
+        const ancla = path.anclaEtiqueta ?? b.getCenter();
+        const anclaPx = map.latLngToContainerPoint(ancla);
         candidatos.push({
           path,
+          ancla,
           area: ancho * altoPx,
-          cx: (p1.x + p2.x) / 2,
-          cy: (p1.y + p2.y) / 2,
+          cx: anclaPx.x,
+          cy: anclaPx.y,
           ancho: anchoTexto + 8,
           alto: 16,
         });
@@ -377,7 +526,10 @@ export function MapaMilitantes({
           c.path.closeTooltip();
         } else {
           colocados.push(rect);
-          c.path.openTooltip();
+          // Pasar el ancla explícitamente es obligatorio: openTooltip() sin
+          // argumento recalcula la posición desde el centro ingenuo de
+          // Leaflet, pisando la corrección de centroideMayorAnillo.
+          c.path.openTooltip(c.ancla);
         }
       }
       for (const path of descartados) path.closeTooltip();
@@ -490,15 +642,31 @@ export function MapaMilitantes({
   function onEachFeature(feature: Feature, layer: Layer) {
     const props = feature.properties as Propiedades;
     // Etiqueta permanente con el nombre — cuál se muestra u oculta lo decide
-    // actualizarEtiquetas() según el tamaño en píxeles de cada polígono. El
-    // símbolo de estado es independiente del modo de color (meta/electorado):
-    // sigue siendo información útil sobre el avance de la meta en cualquier vista.
-    layer.bindTooltip(`${SIMBOLO_ESTADO[props.estado] ?? ""} ${props.nombre}`, {
+    // actualizarEtiquetas() según el tamaño en píxeles de cada polígono.
+    layer.bindTooltip(props.nombre, {
       permanent: true,
       direction: "center",
       className: "etiqueta-mapa",
       opacity: 1,
     });
+    // Leaflet centra el tooltip usando el centroide de TODOS los anillos de
+    // la geometría (islas incluidas) como si fueran un solo polígono con
+    // huecos — para una provincia con una isla lejos de la costa (Pedernales,
+    // La Altagracia) eso puede dejar la etiqueta flotando sobre la isla o en
+    // el mar entre ambas. Se recalcula acá con el punto más "adentro" del
+    // anillo de mayor área (ver centroideMayorAnillo/puntoMasInterior).
+    //
+    // OJO: layer.openTooltip() SIN argumento recalcula la posición desde
+    // this.getCenter() de Leaflet (el mismo cálculo ingenuo que queremos
+    // evitar) — pasar el punto una sola vez acá con setLatLng() no alcanza,
+    // porque actualizarEtiquetas() vuelve a llamar openTooltip() en cada
+    // encuadre. Por eso el ancla se guarda en el propio layer para poder
+    // pasársela explícitamente cada vez que se reabre el tooltip.
+    const centro = centroideMayorAnillo(feature);
+    if (centro) {
+      layer.getTooltip()?.setLatLng(centro);
+      (layer as L.Path & { anclaEtiqueta?: L.LatLngExpression }).anclaEtiqueta = centro;
+    }
     // El hover (mouseover/mouseout por-path de Leaflet) no se maneja acá
     // — ver el efecto de mousemove más arriba — porque es susceptible al
     // "hover fantasma" que dispara el navegador cuando el contenido bajo un
@@ -684,11 +852,6 @@ export function MapaMilitantes({
       maxLat = -Infinity,
       minLng = Infinity,
       maxLng = -Infinity;
-    const anillosDe = (f: Feature): number[][][] => {
-      const g = f.geometry as Polygon | MultiPolygon;
-      if (g.type === "Polygon") return g.coordinates as number[][][];
-      return (g.coordinates as number[][][][]).flat();
-    };
     for (const f of geo.features) {
       for (const anillo of anillosDe(f)) {
         for (const [lng, lat] of anillo) {
@@ -755,9 +918,9 @@ export function MapaMilitantes({
             [COLOR_SIN_DATO, "Sin dato de electores"],
           ]
         : [
-            [COLOR_ESTADO.rojo, `${SIMBOLO_ESTADO.rojo} Lejos de meta`],
-            [COLOR_ESTADO.amarillo, `${SIMBOLO_ESTADO.amarillo} En curso`],
-            [COLOR_ESTADO.verde, `${SIMBOLO_ESTADO.verde} Meta cumplida`],
+            [COLOR_ESTADO.rojo, "Lejos de meta"],
+            [COLOR_ESTADO.amarillo, "En curso"],
+            [COLOR_ESTADO.verde, "Meta cumplida"],
           ];
     let lx = M;
     const ly = H - 28;
@@ -1039,18 +1202,15 @@ export function MapaMilitantes({
         {modoColor === "meta" ? (
           <>
             <span className="flex items-center gap-1">
-              <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.rojo }} />
-              <span aria-hidden>{SIMBOLO_ESTADO.rojo}</span> Lejos de meta
+              <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.rojo }} /> Lejos de meta
               <span className="font-semibold text-gray-700">{conteosLeyenda.rojo}</span>
             </span>
             <span className="flex items-center gap-1">
-              <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.amarillo }} />
-              <span aria-hidden>{SIMBOLO_ESTADO.amarillo}</span> En curso
+              <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.amarillo }} /> En curso
               <span className="font-semibold text-gray-700">{conteosLeyenda.amarillo}</span>
             </span>
             <span className="flex items-center gap-1">
-              <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.verde }} />
-              <span aria-hidden>{SIMBOLO_ESTADO.verde}</span> Meta cumplida
+              <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.verde }} /> Meta cumplida
               <span className="font-semibold text-gray-700">{conteosLeyenda.verde}</span>
             </span>
             {conteosLeyenda.estancadas > 0 && (
@@ -1109,7 +1269,7 @@ export function MapaMilitantes({
               <div>
                 <div className="text-xs uppercase text-gray-400">Avance</div>
                 <div className="text-base font-semibold" style={{ color: COLOR_ESTADO[panel.estado] }}>
-                  <span aria-hidden>{SIMBOLO_ESTADO[panel.estado]}</span> {panel.porcentaje}%
+                  {panel.porcentaje}%
                 </div>
               </div>
             </div>
@@ -1176,7 +1336,6 @@ export function MapaMilitantes({
                   >
                     <span className="flex items-center gap-2">
                       <span className="h-2.5 w-2.5 rounded-full" style={{ background: COLOR_ESTADO[p.estado] }} />
-                      <span aria-hidden className="text-xs">{SIMBOLO_ESTADO[p.estado]}</span>
                       {p.nombre}
                     </span>
                     <span className="shrink-0 text-xs text-gray-500">
@@ -1200,7 +1359,6 @@ export function MapaMilitantes({
                   >
                     <span className="flex items-center gap-2">
                       <span className="h-2.5 w-2.5 rounded-full" style={{ background: COLOR_ESTADO[p.estado] }} />
-                      <span aria-hidden className="text-xs">{SIMBOLO_ESTADO[p.estado]}</span>
                       {p.nombre}
                       {p.estancada && <span className="text-[10px] font-bold uppercase text-red-600">⚠</span>}
                     </span>
