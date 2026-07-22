@@ -77,7 +77,9 @@ function colorPenetracion(p: number | null | undefined): string {
   if (p >= 2) return "#16a34a";
   if (p >= 1) return "#4ade80";
   if (p > 0) return "#86efac";
-  return "#e5e7eb";
+  // 0% pero con dato de electores: verde casi blanco, distinguible del gris
+  // "sin dato" — significa "medible, aún sin captación relevante".
+  return "#dcfce7";
 }
 
 function construirQueryFiltros(f: FiltrosMapa): string {
@@ -155,6 +157,14 @@ export function MapaMilitantes({
 
   const modoColorRef = useRef(modoColor);
   modoColorRef.current = modoColor;
+
+  // Cambiar el modo de color re-estiliza la capa existente en vez de
+  // remontarla: un remonte destruiría los <path> del DOM y dejaría el índice
+  // de hover (elementLayerRef) apuntando a elementos muertos.
+  useEffect(() => {
+    geoLayerRef.current?.setStyle(estiloFeature);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modoColor]);
 
   useEffect(() => {
     setLoading(true);
@@ -850,7 +860,6 @@ export function MapaMilitantes({
                   (provinciaSeleccionada?.id ?? "") +
                   (municipioSeleccionado?.id ?? "") +
                   refreshToken +
-                  modoColor +
                   JSON.stringify(filtros)
                 }
                 ref={geoLayerRef}
