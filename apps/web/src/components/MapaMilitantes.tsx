@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { MapContainer, GeoJSON, TileLayer } from "react-leaflet";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { MapContainer, GeoJSON, TileLayer, CircleMarker, Tooltip as LeafletTooltip } from "react-leaflet";
 import type { Map as LeafletMap, Layer } from "leaflet";
 import * as L from "leaflet";
-import type { Feature, FeatureCollection } from "geojson";
+import type { Feature, FeatureCollection, Polygon, MultiPolygon } from "geojson";
 import { COLOR_ESTADO, type EstadoAvance } from "@cayena/shared";
 import { apiFetch } from "@/lib/api";
 
@@ -15,8 +15,14 @@ type Propiedades = {
   meta: number;
   porcentaje: number;
   estado: EstadoAvance;
+  estancada?: boolean;
+  electores?: number | null;
+  penetracion?: number | null;
+  captadosFiltrados?: number;
+  captadosPrevio?: number;
   provinciaId?: string;
   municipioId?: string;
+  esCabecera?: boolean;
 };
 
 type PanelInfo = Propiedades | null;
@@ -29,12 +35,68 @@ export type DemarcacionSeleccionada =
   // del mapa de distritos): se filtra por municipioId + sin distrito asignado.
   | { tipo: "municipio-sin-distrito"; id: string; nombre: string };
 
+// Filtros que afectan qué militantes cuenta el mapa (y, propagados a la
+// página, qué filas muestra el padrón de abajo).
+export type FiltrosMapa = {
+  periodo?: "semana" | "mes" | "trimestre";
+  origen?: "BACKOFFICE" | "APP_PUBLICA";
+  capturadoPorId?: string;
+};
+
+type ItemCatalogo = {
+  tipo: "provincia" | "municipio" | "distrito";
+  id: string;
+  nombre: string;
+  ruta: string;
+  provinciaId?: string;
+  provinciaNombre?: string;
+  municipioId?: string;
+  municipioNombre?: string;
+};
+
+type Punto = { lat: number; lng: number };
+type Cluster = { lat: number; lng: number; count: number };
+
+type ResumenDemarcacion = {
+  id: string;
+  nombre: string;
+  militantesCaptados: number;
+  meta: number;
+  porcentaje: number;
+  estado: EstadoAvance;
+};
+
+const COLOR_SIN_DATO = "#d1d5db";
+
+// Escala de verdes para el modo "penetración electoral" (captados/electores):
+// más oscuro = mayor porcentaje del electorado captado.
+function colorPenetracion(p: number | null | undefined): string {
+  if (p == null) return COLOR_SIN_DATO;
+  if (p >= 10) return "#14532d";
+  if (p >= 5) return "#166534";
+  if (p >= 2) return "#16a34a";
+  if (p >= 1) return "#4ade80";
+  if (p > 0) return "#86efac";
+  return "#e5e7eb";
+}
+
+function construirQueryFiltros(f: FiltrosMapa): string {
+  const params = new URLSearchParams();
+  if (f.periodo) params.set("periodo", f.periodo);
+  if (f.origen) params.set("origen", f.origen);
+  if (f.capturadoPorId) params.set("capturadoPorId", f.capturadoPorId);
+  const s = params.toString();
+  return s ? `?${s}` : "";
+}
+
 export function MapaMilitantes({
   compacto = false,
   alto,
   aspecto,
   onDemarcacionChange,
+  onFiltrosChange,
   refreshToken = 0,
+  herramientas = false,
 }: {
   compacto?: boolean;
   /** Clase Tailwind de altura fija (ej. "h-[520px]"). Ignorada si se pasa `aspecto`. */
@@ -46,10 +108,16 @@ export function MapaMilitantes({
    * volver atrás, con `null`), para que el padrón de militantes debajo del
    * mapa se filtre. */
   onDemarcacionChange?: (sel: DemarcacionSeleccionada | null) => void;
+  /** Se dispara cuando cambian los filtros de la barra de herramientas del
+   * mapa, para que el padrón de abajo aplique los mismos filtros. */
+  onFiltrosChange?: (filtros: FiltrosMapa) => void;
   /** Incrementar este valor fuerza un refetch de la capa actual (mismo nivel
    * y demarcación seleccionada) sin resetear el drill-down — úsalo tras
    * registrar/importar militantes para que el mapa refleje el cambio. */
   refreshToken?: number;
+  /** Muestra la barra de herramientas completa (búsqueda, filtros, modo de
+   * color, puntos, exportar) y el ranking del nivel actual. */
+  herramientas?: boolean;
 }) {
   const [nivel, setNivel] = useState<"nacional" | "municipios" | "distritos">("nacional");
   const [provinciaSeleccionada, setProvinciaSeleccionada] = useState<{ id: string; nombre: string } | null>(
@@ -61,6 +129,15 @@ export function MapaMilitantes({
   const [geo, setGeo] = useState<FeatureCollection | null>(null);
   const [panel, setPanel] = useState<PanelInfo>(null);
   const [loading, setLoading] = useState(true);
+  const [filtros, setFiltros] = useState<FiltrosMapa>({});
+  const [modoColor, setModoColor] = useState<"meta" | "electorado">("meta");
+  const [verPuntos, setVerPuntos] = useState(false);
+  const [puntos, setPuntos] = useState<Punto[]>([]);
+  const [catalogo, setCatalogo] = useState<ItemCatalogo[] | null>(null);
+  const [busqueda, setBusqueda] = useState("");
+  const [busquedaAbierta, setBusquedaAbierta] = useState(false);
+  const [promotores, setPromotores] = useState<{ id: string; nombre: string }[]>([]);
+
   const mapRef = useRef<LeafletMap | null>(null);
   const geoLayerRef = useRef<L.GeoJSON | null>(null);
   // Mapa de elemento DOM -> layer de Leaflet, reconstruido cada vez que se
@@ -68,6 +145,16 @@ export function MapaMilitantes({
   // hit-testing manual sobre `mousemove` para saber por qué hace falta.
   const elementLayerRef = useRef(new Map<Element, L.Path>());
   const resaltadoRef = useRef<L.Path | null>(null);
+  // Doble-tap en pantallas táctiles: el primer tap selecciona, el segundo entra.
+  const ultimoTapRef = useRef<string | null>(null);
+
+  const esTactil = useMemo(
+    () => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches,
+    [],
+  );
+
+  const modoColorRef = useRef(modoColor);
+  modoColorRef.current = modoColor;
 
   useEffect(() => {
     setLoading(true);
@@ -80,12 +167,14 @@ export function MapaMilitantes({
     // que un mousemove en el hueco entre niveles intente llamar setStyle()
     // sobre un layer de Leaflet ya destruido.
     resaltadoRef.current = null;
+    ultimoTapRef.current = null;
+    const qs = construirQueryFiltros(filtros);
     const path =
       nivel === "nacional"
-        ? "/geo/provincias"
+        ? `/geo/provincias${qs}`
         : nivel === "municipios"
-          ? `/geo/provincias/${provinciaSeleccionada?.id}/municipios`
-          : `/geo/municipios/${municipioSeleccionado?.id}/distritos-municipales`;
+          ? `/geo/provincias/${provinciaSeleccionada?.id}/municipios${qs}`
+          : `/geo/municipios/${municipioSeleccionado?.id}/distritos-municipales${qs}`;
     apiFetch<FeatureCollection>(path)
       .then((data) => {
         setGeo(data);
@@ -105,7 +194,35 @@ export function MapaMilitantes({
       })
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nivel, provinciaSeleccionada?.id, municipioSeleccionado?.id, refreshToken]);
+  }, [nivel, provinciaSeleccionada?.id, municipioSeleccionado?.id, refreshToken, filtros]);
+
+  // Capa opcional de puntos: ubicación GPS real de los militantes del alcance visible.
+  useEffect(() => {
+    if (!verPuntos) {
+      setPuntos([]);
+      return;
+    }
+    const params = new URLSearchParams(construirQueryFiltros(filtros).replace(/^\?/, ""));
+    if (nivel === "municipios" && provinciaSeleccionada) params.set("provinciaId", provinciaSeleccionada.id);
+    if (nivel === "distritos" && municipioSeleccionado) params.set("municipioId", municipioSeleccionado.id);
+    apiFetch<Punto[]>(`/geo/militantes-puntos?${params.toString()}`)
+      .then(setPuntos)
+      .catch(() => setPuntos([]));
+  }, [verPuntos, nivel, provinciaSeleccionada, municipioSeleccionado, filtros, refreshToken]);
+
+  // Catálogo para el buscador (una sola vez) y promotores para el filtro.
+  useEffect(() => {
+    if (!herramientas) return;
+    apiFetch<ItemCatalogo[]>("/geo/lista/demarcaciones").then(setCatalogo).catch(() => setCatalogo([]));
+    apiFetch<{ id: string; nombre: string; role: string }[]>("/usuarios")
+      .then((us) => setPromotores(us.filter((u) => u.role === "PROMOTOR" || u.role === "DIGITADOR")))
+      .catch(() => setPromotores([]));
+  }, [herramientas]);
+
+  useEffect(() => {
+    onFiltrosChange?.(filtros);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtros]);
 
   useEffect(() => {
     if (!geo) return;
@@ -122,6 +239,28 @@ export function MapaMilitantes({
       // el territorio: fitBounds siempre calcula el zoom máximo que
       // garantiza que los límites quepan enteros dentro del padding.
       map.fitBounds(bounds, { padding: [2, 2], animate: false });
+      actualizarEtiquetas();
+    }
+
+    // Solo caben tantas etiquetas como espacio haya: mostrar el nombre de un
+    // polígono minúsculo solo mancha el mapa. Tras cada encuadre se mide el
+    // ancho en píxeles de cada demarcación y se muestran únicamente las
+    // etiquetas que caben razonablemente en su territorio.
+    function actualizarEtiquetas() {
+      const map = mapRef.current;
+      const layer = geoLayerRef.current;
+      if (!map || !layer) return;
+      layer.eachLayer((l) => {
+        const path = l as L.Path & { getBounds?: () => L.LatLngBounds };
+        if (!path.getBounds) return;
+        const b = path.getBounds();
+        const p1 = map.latLngToContainerPoint(b.getNorthWest());
+        const p2 = map.latLngToContainerPoint(b.getSouthEast());
+        const ancho = Math.abs(p2.x - p1.x);
+        const altoPx = Math.abs(p2.y - p1.y);
+        if (ancho >= 52 && altoPx >= 22) (l as L.Path).openTooltip();
+        else (l as L.Path).closeTooltip();
+      });
     }
 
     // Encuadrar dentro del evento "add" de la capa (el enfoque anterior)
@@ -189,12 +328,19 @@ export function MapaMilitantes({
   }, [nivel, municipioSeleccionado?.id, onDemarcacionChange]);
 
   function estiloFeature(feature?: Feature) {
-    const estado = (feature?.properties as Propiedades | undefined)?.estado ?? "rojo";
+    const props = feature?.properties as Propiedades | undefined;
+    const fill =
+      modoColorRef.current === "electorado"
+        ? colorPenetracion(props?.penetracion)
+        : COLOR_ESTADO[props?.estado ?? "rojo"];
     return {
-      fillColor: COLOR_ESTADO[estado],
+      fillColor: fill,
       fillOpacity: 0.75,
       color: "#ffffff",
       weight: 1.2,
+      // Demarcación estancada (sin registros nuevos en 14 días y meta sin
+      // cumplir): borde punteado rojo oscuro para llamar la atención.
+      ...(props?.estancada ? { dashArray: "5 4", color: "#991b1b", weight: 1.6 } : {}),
     };
   }
 
@@ -211,9 +357,27 @@ export function MapaMilitantes({
     }
   }
 
+  function drillDown(props: Propiedades) {
+    if (nivel === "nacional") {
+      setProvinciaSeleccionada({ id: props.id, nombre: props.nombre });
+      setNivel("municipios");
+    } else if (nivel === "municipios") {
+      setMunicipioSeleccionado({ id: props.id, nombre: props.nombre });
+      setNivel("distritos");
+    }
+  }
+
   function onEachFeature(feature: Feature, layer: Layer) {
     const props = feature.properties as Propiedades;
-    // El hover (mouseover/mouseout por-path de Leaflet) ya no se maneja acá
+    // Etiqueta permanente con el nombre — cuál se muestra u oculta lo decide
+    // actualizarEtiquetas() según el tamaño en píxeles de cada polígono.
+    layer.bindTooltip(props.nombre, {
+      permanent: true,
+      direction: "center",
+      className: "etiqueta-mapa",
+      opacity: 1,
+    });
+    // El hover (mouseover/mouseout por-path de Leaflet) no se maneja acá
     // — ver el efecto de mousemove más arriba — porque es susceptible al
     // "hover fantasma" que dispara el navegador cuando el contenido bajo un
     // cursor quieto cambia sin que el mouse se haya movido de verdad. El
@@ -222,19 +386,22 @@ export function MapaMilitantes({
     layer.on({
       click: () => {
         // Fijar panel + demarcación de inmediato con los datos ya disponibles
-        // del feature clicado (no depende de que el hover haya disparado
-        // antes, lo cual es clave en pantallas táctiles) — así, al entrar a
-        // un nivel más profundo, el total/lista de la demarcación recién
-        // seleccionada queda visible sin esperar a un nuevo hover.
+        // del feature clicado — así, al entrar a un nivel más profundo, el
+        // total/lista de la demarcación recién seleccionada queda visible.
         setPanel(props);
         avisarDemarcacion(props);
-        if (nivel === "nacional") {
-          setProvinciaSeleccionada({ id: props.id, nombre: props.nombre });
-          setNivel("municipios");
-        } else if (nivel === "municipios") {
-          setMunicipioSeleccionado({ id: props.id, nombre: props.nombre });
-          setNivel("distritos");
+        // En pantallas táctiles no existe hover: el primer tap solo
+        // selecciona (muestra panel + filtra padrón) y un segundo tap sobre
+        // la misma demarcación es el que entra al nivel siguiente.
+        if (esTactil) {
+          const clave = props.id ?? props.nombre;
+          if (ultimoTapRef.current !== clave) {
+            ultimoTapRef.current = clave;
+            return;
+          }
+          ultimoTapRef.current = null;
         }
+        drillDown(props);
       },
     });
   }
@@ -254,33 +421,394 @@ export function MapaMilitantes({
     onDemarcacionChange?.(null);
   }
 
+  // Salto directo desde el buscador (o el ranking): navega al nivel correcto
+  // y llena el panel con el resumen de la demarcación elegida.
+  function seleccionarDemarcacion(item: ItemCatalogo) {
+    setBusqueda("");
+    setBusquedaAbierta(false);
+    if (item.tipo === "provincia") {
+      setProvinciaSeleccionada({ id: item.id, nombre: item.nombre });
+      setMunicipioSeleccionado(null);
+      setNivel("municipios");
+      onDemarcacionChange?.({ tipo: "provincia", id: item.id, nombre: item.nombre });
+      apiFetch<ResumenDemarcacion>(`/geo/provincias/${item.id}`)
+        .then((r) => setPanel(r as Propiedades))
+        .catch(() => setPanel(null));
+    } else if (item.tipo === "municipio") {
+      setProvinciaSeleccionada({ id: item.provinciaId!, nombre: item.provinciaNombre! });
+      setMunicipioSeleccionado({ id: item.id, nombre: item.nombre });
+      setNivel("distritos");
+      onDemarcacionChange?.({ tipo: "municipio", id: item.id, nombre: item.nombre });
+      apiFetch<ResumenDemarcacion>(`/geo/resumen/municipio/${item.id}`)
+        .then((r) => setPanel(r as Propiedades))
+        .catch(() => setPanel(null));
+    } else {
+      setProvinciaSeleccionada({ id: item.provinciaId!, nombre: item.provinciaNombre! });
+      setMunicipioSeleccionado({ id: item.municipioId!, nombre: item.municipioNombre! });
+      setNivel("distritos");
+      onDemarcacionChange?.({ tipo: "distrito", id: item.id, nombre: item.nombre });
+      apiFetch<ResumenDemarcacion>(`/geo/resumen/distrito-municipal/${item.id}`)
+        .then((r) => setPanel(r as Propiedades))
+        .catch(() => setPanel(null));
+    }
+  }
+
+  const sugerencias = useMemo(() => {
+    if (!catalogo || busqueda.trim().length < 2) return [];
+    const q = busqueda
+      .normalize("NFKD")
+      .replace(/[̀-ͯ]/g, "")
+      .toLowerCase();
+    return catalogo
+      .filter((c) =>
+        c.nombre
+          .normalize("NFKD")
+          .replace(/[̀-ͯ]/g, "")
+          .toLowerCase()
+          .includes(q),
+      )
+      .slice(0, 8);
+  }, [catalogo, busqueda]);
+
+  const conteosLeyenda = useMemo(() => {
+    const c = { rojo: 0, amarillo: 0, verde: 0, estancadas: 0 };
+    for (const f of geo?.features ?? []) {
+      const p = f.properties as Propiedades;
+      c[p.estado ?? "rojo"]++;
+      if (p.estancada) c.estancadas++;
+    }
+    return c;
+  }, [geo]);
+
+  // Ranking del nivel visible: mejores y peores demarcaciones por avance.
+  const ranking = useMemo(() => {
+    const feats = (geo?.features ?? []).map((f) => f.properties as Propiedades);
+    if (feats.length < 3) return null;
+    const orden = [...feats].sort(
+      (a, b) => b.porcentaje - a.porcentaje || b.militantesCaptados - a.militantesCaptados,
+    );
+    return { top: orden.slice(0, 5), bottom: orden.slice(-5).reverse() };
+  }, [geo]);
+
+  function clickRanking(props: Propiedades) {
+    setPanel(props);
+    avisarDemarcacion(props);
+    if (nivel === "nacional") {
+      seleccionarDemarcacion({ tipo: "provincia", id: props.id, nombre: props.nombre, ruta: "" });
+    } else if (nivel === "municipios" && provinciaSeleccionada) {
+      seleccionarDemarcacion({
+        tipo: "municipio",
+        id: props.id,
+        nombre: props.nombre,
+        ruta: "",
+        provinciaId: provinciaSeleccionada.id,
+        provinciaNombre: provinciaSeleccionada.nombre,
+      });
+    }
+    // En el nivel de distritos no hay nivel más profundo: solo selecciona.
+  }
+
+  // Agrupa los puntos GPS en clusters por celda para no dibujar miles de
+  // marcadores individuales (sin dependencias externas de clustering).
+  const clusters = useMemo<Cluster[]>(() => {
+    if (puntos.length === 0) return [];
+    let minLat = Infinity,
+      maxLat = -Infinity,
+      minLng = Infinity,
+      maxLng = -Infinity;
+    for (const p of puntos) {
+      if (p.lat < minLat) minLat = p.lat;
+      if (p.lat > maxLat) maxLat = p.lat;
+      if (p.lng < minLng) minLng = p.lng;
+      if (p.lng > maxLng) maxLng = p.lng;
+    }
+    const celdas = 30;
+    const dLat = Math.max((maxLat - minLat) / celdas, 0.0001);
+    const dLng = Math.max((maxLng - minLng) / celdas, 0.0001);
+    const grupos = new Map<string, { sumLat: number; sumLng: number; count: number }>();
+    for (const p of puntos) {
+      const clave = `${Math.floor((p.lat - minLat) / dLat)}:${Math.floor((p.lng - minLng) / dLng)}`;
+      const g = grupos.get(clave) ?? { sumLat: 0, sumLng: 0, count: 0 };
+      g.sumLat += p.lat;
+      g.sumLng += p.lng;
+      g.count++;
+      grupos.set(clave, g);
+    }
+    return [...grupos.values()].map((g) => ({
+      lat: g.sumLat / g.count,
+      lng: g.sumLng / g.count,
+      count: g.count,
+    }));
+  }, [puntos]);
+
+  // Exporta el mapa actual como imagen PNG dibujando los polígonos en un
+  // canvas propio a partir del geojson (independiente de Leaflet y de los
+  // tiles externos, así no hay problemas de CORS ni dependencias).
+  function exportarPNG() {
+    if (!geo) return;
+    const W = 1400;
+    const H = 1000;
+    const M = 40;
+    const canvas = document.createElement("canvas");
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    ctx.fillStyle = "#f0fdf4";
+    ctx.fillRect(0, 0, W, H);
+
+    let minLat = Infinity,
+      maxLat = -Infinity,
+      minLng = Infinity,
+      maxLng = -Infinity;
+    const anillosDe = (f: Feature): number[][][] => {
+      const g = f.geometry as Polygon | MultiPolygon;
+      if (g.type === "Polygon") return g.coordinates as number[][][];
+      return (g.coordinates as number[][][][]).flat();
+    };
+    for (const f of geo.features) {
+      for (const anillo of anillosDe(f)) {
+        for (const [lng, lat] of anillo) {
+          if (lat < minLat) minLat = lat;
+          if (lat > maxLat) maxLat = lat;
+          if (lng < minLng) minLng = lng;
+          if (lng > maxLng) maxLng = lng;
+        }
+      }
+    }
+    const areaW = W - 2 * M;
+    const areaH = H - 2 * M - 60;
+    // Corrige la distorsión este-oeste: un grado de longitud mide menos km
+    // mientras más lejos del ecuador (RD ~18-20°N).
+    const factorLng = Math.cos(((minLat + maxLat) / 2) * (Math.PI / 180));
+    const escala = Math.min(areaW / ((maxLng - minLng) * factorLng), areaH / (maxLat - minLat));
+    const offX = M + (areaW - (maxLng - minLng) * factorLng * escala) / 2;
+    const offY = M + 60 + (areaH - (maxLat - minLat) * escala) / 2;
+    const px = (lng: number) => offX + (lng - minLng) * factorLng * escala;
+    const py = (lat: number) => offY + (maxLat - lat) * escala;
+
+    for (const f of geo.features) {
+      const props = f.properties as Propiedades;
+      const fill =
+        modoColor === "electorado" ? colorPenetracion(props.penetracion) : COLOR_ESTADO[props.estado ?? "rojo"];
+      ctx.fillStyle = fill;
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1.5;
+      for (const anillo of anillosDe(f)) {
+        ctx.beginPath();
+        anillo.forEach(([lng, lat], i) => {
+          if (i === 0) ctx.moveTo(px(lng), py(lat));
+          else ctx.lineTo(px(lng), py(lat));
+        });
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+
+    const titulo =
+      nivel === "nacional"
+        ? "República Dominicana — militantes por provincia"
+        : nivel === "municipios"
+          ? `Municipios de ${provinciaSeleccionada?.nombre}`
+          : `Distritos municipales de ${municipioSeleccionado?.nombre}`;
+    ctx.fillStyle = "#14532d";
+    ctx.font = "bold 28px system-ui, sans-serif";
+    ctx.fillText(titulo, M, M + 8);
+    ctx.fillStyle = "#6b7280";
+    ctx.font = "16px system-ui, sans-serif";
+    ctx.fillText(
+      `Cayena · ${new Date().toLocaleDateString("es-DO", { day: "numeric", month: "long", year: "numeric" })}`,
+      M,
+      M + 34,
+    );
+
+    const leyenda =
+      modoColor === "electorado"
+        ? [
+            ["#14532d", "≥10% del electorado"],
+            ["#16a34a", "2-10%"],
+            ["#86efac", "<2%"],
+            [COLOR_SIN_DATO, "Sin dato de electores"],
+          ]
+        : [
+            [COLOR_ESTADO.rojo, "Lejos de meta"],
+            [COLOR_ESTADO.amarillo, "En curso"],
+            [COLOR_ESTADO.verde, "Meta cumplida"],
+          ];
+    let lx = M;
+    const ly = H - 28;
+    ctx.font = "15px system-ui, sans-serif";
+    for (const [color, texto] of leyenda) {
+      ctx.fillStyle = color;
+      ctx.fillRect(lx, ly - 12, 14, 14);
+      ctx.fillStyle = "#374151";
+      ctx.fillText(texto, lx + 20, ly);
+      lx += ctx.measureText(texto).width + 56;
+    }
+
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `mapa-${nivel === "nacional" ? "nacional" : nivel === "municipios" ? provinciaSeleccionada?.id : municipioSeleccionado?.id}.png`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }, "image/png");
+  }
+
+  const tendencia =
+    panel?.captadosFiltrados !== undefined && panel?.captadosPrevio !== undefined
+      ? panel.captadosFiltrados - panel.captadosPrevio
+      : null;
+
   return (
     <div>
-      <div className="mb-3 flex items-center justify-between">
-        <div className="text-sm text-gray-500">
-          {nivel === "nacional" ? (
-            "Vista nacional por provincia"
-          ) : nivel === "municipios" ? (
-            <>Municipios de <span className="font-semibold text-institucional-900">{provinciaSeleccionada?.nombre}</span></>
-          ) : (
-            <>Distritos municipales de <span className="font-semibold text-institucional-900">{municipioSeleccionado?.nombre}</span></>
+      {herramientas && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          {/* Buscador con salto directo */}
+          <div className="relative">
+            <input
+              value={busqueda}
+              onChange={(e) => {
+                setBusqueda(e.target.value);
+                setBusquedaAbierta(true);
+              }}
+              onFocus={() => setBusquedaAbierta(true)}
+              onBlur={() => setTimeout(() => setBusquedaAbierta(false), 200)}
+              placeholder="Buscar demarcación…"
+              className="w-52 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-institucional-600 focus:outline-none"
+            />
+            {busquedaAbierta && sugerencias.length > 0 && (
+              <div className="absolute left-0 top-full z-[1100] mt-1 w-72 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
+                {sugerencias.map((s) => (
+                  <button
+                    key={`${s.tipo}-${s.id}`}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      seleccionarDemarcacion(s);
+                    }}
+                    className="flex w-full items-baseline justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-institucional-50"
+                  >
+                    <span className="font-medium text-gray-800">{s.nombre}</span>
+                    <span className="shrink-0 text-xs text-gray-400">
+                      {s.tipo === "provincia" ? "Provincia" : s.tipo === "municipio" ? s.ruta : `DM · ${s.ruta}`}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <select
+            value={filtros.periodo ?? ""}
+            onChange={(e) =>
+              setFiltros((f) => ({ ...f, periodo: (e.target.value || undefined) as FiltrosMapa["periodo"] }))
+            }
+            className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-institucional-600 focus:outline-none"
+          >
+            <option value="">Histórico completo</option>
+            <option value="semana">Última semana</option>
+            <option value="mes">Este mes</option>
+            <option value="trimestre">Este trimestre</option>
+          </select>
+
+          <select
+            value={filtros.origen ?? ""}
+            onChange={(e) =>
+              setFiltros((f) => ({ ...f, origen: (e.target.value || undefined) as FiltrosMapa["origen"] }))
+            }
+            className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-institucional-600 focus:outline-none"
+          >
+            <option value="">Todo origen</option>
+            <option value="BACKOFFICE">Back office</option>
+            <option value="APP_PUBLICA">App pública</option>
+          </select>
+
+          {promotores.length > 0 && (
+            <select
+              value={filtros.capturadoPorId ?? ""}
+              onChange={(e) => setFiltros((f) => ({ ...f, capturadoPorId: e.target.value || undefined }))}
+              className="max-w-[180px] rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-institucional-600 focus:outline-none"
+            >
+              <option value="">Todos los promotores</option>
+              {promotores.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.nombre}
+                </option>
+              ))}
+            </select>
           )}
+
+          <div className="ml-auto flex items-center gap-2">
+            <div className="flex rounded-lg border border-gray-200 bg-white p-0.5 text-xs">
+              <button
+                onClick={() => setModoColor("meta")}
+                className={`rounded-md px-2 py-1 ${modoColor === "meta" ? "bg-institucional-600 text-white" : "text-gray-500"}`}
+                title="Colorear por avance hacia la meta"
+              >
+                Meta
+              </button>
+              <button
+                onClick={() => setModoColor("electorado")}
+                className={`rounded-md px-2 py-1 ${modoColor === "electorado" ? "bg-institucional-600 text-white" : "text-gray-500"}`}
+                title="Colorear por % del electorado captado (requiere datos de electores JCE)"
+              >
+                % Electorado
+              </button>
+            </div>
+            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-gray-600">
+              <input
+                type="checkbox"
+                checked={verPuntos}
+                onChange={(e) => setVerPuntos(e.target.checked)}
+                className="h-3.5 w-3.5 accent-institucional-600"
+              />
+              Ubicaciones
+            </label>
+            <button
+              onClick={exportarPNG}
+              className="rounded-lg border border-institucional-600 px-2.5 py-1 text-xs font-medium text-institucional-700 hover:bg-institucional-50"
+              title="Descargar el mapa actual como imagen PNG"
+            >
+              ⤓ PNG
+            </button>
+          </div>
         </div>
-        {nivel === "municipios" && (
+      )}
+
+      {/* Breadcrumb clicable: salta directo a cualquier nivel superior. */}
+      <div className="mb-3 flex items-center justify-between">
+        <nav aria-label="Ruta del mapa" className="flex items-center gap-1 text-sm text-gray-500">
           <button
             onClick={volverANacional}
-            className="rounded-lg border border-institucional-600 px-3 py-1.5 text-sm font-medium text-institucional-700 hover:bg-institucional-50"
+            disabled={nivel === "nacional"}
+            className={nivel === "nacional" ? "font-semibold text-institucional-900" : "hover:text-institucional-700 hover:underline"}
           >
-            ← Volver al mapa nacional
+            Nacional
           </button>
-        )}
-        {nivel === "distritos" && (
-          <button
-            onClick={volverAMunicipios}
-            className="rounded-lg border border-institucional-600 px-3 py-1.5 text-sm font-medium text-institucional-700 hover:bg-institucional-50"
-          >
-            ← Volver a municipios de {provinciaSeleccionada?.nombre}
-          </button>
+          {provinciaSeleccionada && (
+            <>
+              <span className="text-gray-300">›</span>
+              <button
+                onClick={volverAMunicipios}
+                disabled={nivel === "municipios"}
+                className={nivel === "municipios" ? "font-semibold text-institucional-900" : "hover:text-institucional-700 hover:underline"}
+              >
+                {provinciaSeleccionada.nombre}
+              </button>
+            </>
+          )}
+          {municipioSeleccionado && nivel === "distritos" && (
+            <>
+              <span className="text-gray-300">›</span>
+              <span className="font-semibold text-institucional-900">{municipioSeleccionado.nombre}</span>
+            </>
+          )}
+        </nav>
+        {esTactil && nivel !== "distritos" && (
+          <span className="text-xs text-gray-400">Toca para seleccionar · toca otra vez para entrar</span>
         )}
       </div>
 
@@ -304,7 +832,7 @@ export function MapaMilitantes({
             style={{ height: "100%", width: "100%" }}
             scrollWheelZoom={!compacto}
             dragging={!compacto}
-            doubleClickZoom={!compacto}
+            doubleClickZoom={false}
             touchZoom={!compacto}
             boxZoom={!compacto}
             keyboard={!compacto}
@@ -317,59 +845,205 @@ export function MapaMilitantes({
             />
             {geo && (
               <GeoJSON
-                key={nivel + (provinciaSeleccionada?.id ?? "") + (municipioSeleccionado?.id ?? "") + refreshToken}
+                key={
+                  nivel +
+                  (provinciaSeleccionada?.id ?? "") +
+                  (municipioSeleccionado?.id ?? "") +
+                  refreshToken +
+                  modoColor +
+                  JSON.stringify(filtros)
+                }
                 ref={geoLayerRef}
                 data={geo}
                 style={estiloFeature}
                 onEachFeature={onEachFeature}
               />
             )}
+            {verPuntos &&
+              clusters.map((c, i) => (
+                <CircleMarker
+                  key={i}
+                  center={[c.lat, c.lng]}
+                  radius={Math.min(4 + Math.sqrt(c.count) * 2.5, 22)}
+                  pathOptions={{ color: "#1d4ed8", fillColor: "#3b82f6", fillOpacity: 0.65, weight: 1 }}
+                >
+                  <LeafletTooltip direction="top">
+                    {c.count.toLocaleString("es-DO")} militante{c.count === 1 ? "" : "s"}
+                  </LeafletTooltip>
+                </CircleMarker>
+              ))}
           </MapContainer>
         </div>
       )}
 
-      <div className="mt-3 flex items-center gap-4 text-xs text-gray-500">
-        <span className="flex items-center gap-1">
-          <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.rojo }} /> Lejos de meta
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.amarillo }} /> En curso
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.verde }} /> Meta cumplida
-        </span>
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
+        {modoColor === "meta" ? (
+          <>
+            <span className="flex items-center gap-1">
+              <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.rojo }} /> Lejos de meta
+              <span className="font-semibold text-gray-700">{conteosLeyenda.rojo}</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.amarillo }} /> En curso
+              <span className="font-semibold text-gray-700">{conteosLeyenda.amarillo}</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.verde }} /> Meta cumplida
+              <span className="font-semibold text-gray-700">{conteosLeyenda.verde}</span>
+            </span>
+            {conteosLeyenda.estancadas > 0 && (
+              <span className="flex items-center gap-1">
+                <span className="h-3 w-3 rounded-sm border border-dashed border-red-800" /> Estancadas
+                <span className="font-semibold text-red-700">{conteosLeyenda.estancadas}</span>
+              </span>
+            )}
+          </>
+        ) : (
+          <>
+            <span className="flex items-center gap-1">
+              <span className="h-3 w-3 rounded-sm" style={{ background: "#14532d" }} /> ≥10% del electorado
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="h-3 w-3 rounded-sm" style={{ background: "#16a34a" }} /> 2-10%
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="h-3 w-3 rounded-sm" style={{ background: "#86efac" }} /> &lt;2%
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_SIN_DATO }} /> Sin dato de electores
+            </span>
+          </>
+        )}
         {loading && <span className="ml-auto animate-pulse">Cargando…</span>}
       </div>
 
       {/* Panel fijo debajo del mapa (RF-13.3): no es un tooltip flotante. */}
       <div className="mt-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         {panel ? (
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <div>
-              <div className="text-xs uppercase text-gray-400">Demarcación</div>
-              <div className="text-base font-semibold text-institucional-900">{panel.nombre}</div>
-            </div>
-            <div>
-              <div className="text-xs uppercase text-gray-400">Militantes captados</div>
-              <div className="text-base font-semibold">{panel.militantesCaptados.toLocaleString("es-DO")}</div>
-            </div>
-            <div>
-              <div className="text-xs uppercase text-gray-400">Meta</div>
-              <div className="text-base font-semibold">{panel.meta.toLocaleString("es-DO")}</div>
-            </div>
-            <div>
-              <div className="text-xs uppercase text-gray-400">Avance</div>
-              <div className="text-base font-semibold" style={{ color: COLOR_ESTADO[panel.estado] }}>
-                {panel.porcentaje}%
+          <div>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <div>
+                <div className="text-xs uppercase text-gray-400">Demarcación</div>
+                <div className="flex items-center gap-2 text-base font-semibold text-institucional-900">
+                  {panel.nombre}
+                  {panel.estancada && (
+                    <span
+                      className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-700"
+                      title="Sin militantes nuevos en los últimos 14 días y meta sin cumplir"
+                    >
+                      Estancada
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs uppercase text-gray-400">Militantes captados</div>
+                <div className="text-base font-semibold">{panel.militantesCaptados.toLocaleString("es-DO")}</div>
+              </div>
+              <div>
+                <div className="text-xs uppercase text-gray-400">Meta</div>
+                <div className="text-base font-semibold">{panel.meta.toLocaleString("es-DO")}</div>
+              </div>
+              <div>
+                <div className="text-xs uppercase text-gray-400">Avance</div>
+                <div className="text-base font-semibold" style={{ color: COLOR_ESTADO[panel.estado] }}>
+                  {panel.porcentaje}%
+                </div>
               </div>
             </div>
+            {(panel.captadosFiltrados !== undefined || panel.electores != null) && (
+              <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-1 border-t border-gray-100 pt-3 text-sm">
+                {panel.captadosFiltrados !== undefined && (
+                  <span className="text-gray-600">
+                    En el período seleccionado:{" "}
+                    <span className="font-semibold text-gray-900">
+                      {panel.captadosFiltrados.toLocaleString("es-DO")}
+                    </span>
+                    {tendencia !== null && (
+                      <span
+                        className={`ml-1.5 font-semibold ${tendencia > 0 ? "text-green-600" : tendencia < 0 ? "text-red-600" : "text-gray-400"}`}
+                        title="Comparado con el período anterior equivalente"
+                      >
+                        {tendencia > 0 ? `▲ +${tendencia}` : tendencia < 0 ? `▼ ${tendencia}` : "— igual"}
+                      </span>
+                    )}
+                  </span>
+                )}
+                {panel.electores != null && (
+                  <span className="text-gray-600">
+                    Electores JCE:{" "}
+                    <span className="font-semibold text-gray-900">{panel.electores.toLocaleString("es-DO")}</span>
+                    {panel.penetracion != null && (
+                      <span className="ml-1.5 font-semibold text-institucional-700">
+                        · {panel.penetracion}% captado
+                      </span>
+                    )}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <p className="text-sm text-gray-400">
-            Pasa el cursor sobre una demarcación del mapa para ver su detalle aquí.
+            {esTactil
+              ? "Toca una demarcación del mapa para ver su detalle aquí."
+              : "Pasa el cursor sobre una demarcación del mapa para ver su detalle aquí."}
           </p>
         )}
       </div>
+
+      {/* Ranking del nivel visible: mejores y peores demarcaciones. */}
+      {herramientas && ranking && (
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
+              Mayor avance en este nivel
+            </h3>
+            <ul className="divide-y divide-gray-50">
+              {ranking.top.map((p) => (
+                <li key={p.id ?? p.nombre}>
+                  <button
+                    onClick={() => clickRanking(p)}
+                    className="flex w-full items-center justify-between gap-2 py-1.5 text-left text-sm hover:text-institucional-700"
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="h-2.5 w-2.5 rounded-full" style={{ background: COLOR_ESTADO[p.estado] }} />
+                      {p.nombre}
+                    </span>
+                    <span className="shrink-0 text-xs text-gray-500">
+                      {p.militantesCaptados.toLocaleString("es-DO")} · {p.porcentaje}%
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
+              Menor avance en este nivel
+            </h3>
+            <ul className="divide-y divide-gray-50">
+              {ranking.bottom.map((p) => (
+                <li key={p.id ?? p.nombre}>
+                  <button
+                    onClick={() => clickRanking(p)}
+                    className="flex w-full items-center justify-between gap-2 py-1.5 text-left text-sm hover:text-institucional-700"
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="h-2.5 w-2.5 rounded-full" style={{ background: COLOR_ESTADO[p.estado] }} />
+                      {p.nombre}
+                      {p.estancada && <span className="text-[10px] font-bold uppercase text-red-600">⚠</span>}
+                    </span>
+                    <span className="shrink-0 text-xs text-gray-500">
+                      {p.militantesCaptados.toLocaleString("es-DO")} · {p.porcentaje}%
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

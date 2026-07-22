@@ -13,3 +13,25 @@ body {
   height: 100%;
   background: #eefbf1;
 }
+
+/* Etiquetas de nombre sobre los polígonos del mapa de militantes.
+   pointer-events none es obligatorio: si la etiqueta capturara el cursor,
+   el hit-testing por mousemove del mapa dejaría de detectar el polígono
+   que está debajo justo en el centro de cada demarcación. */
+.etiqueta-mapa {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  pointer-events: none !important;
+  font-size: 11px;
+  font-weight: 600;
+  color: #1f2937;
+  text-shadow:
+    0 0 3px #ffffff,
+    0 0 6px #ffffff,
+    0 1px 2px #ffffff;
+  white-space: nowrap;
+}
+.etiqueta-mapa::before {
+  display: none; /* sin la flechita del tooltip de Leaflet */
+}

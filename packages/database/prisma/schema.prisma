@@ -46,6 +46,9 @@ model Provincia {
   id     String @id // slug, coincide con properties.id del GeoJSON
   codigo String @unique // ISO 3166-2:DO, ej. DO-25
   nombre String
+  // Electores hábiles según el padrón de la JCE (para calcular penetración
+  // electoral en el mapa). Nulo hasta que se importe con import-electores.ts.
+  electores Int?
 
   municipios Municipio[]
   militantes Militante[]
@@ -60,6 +63,7 @@ model Municipio {
   nombre      String
   provinciaId String
   provincia   Provincia @relation(fields: [provinciaId], references: [id])
+  electores   Int?
 
   militantes           Militante[]
   obras                Obra[]
@@ -81,6 +85,7 @@ model DistritoMunicipal {
   nombre      String
   municipioId String
   municipio   Municipio @relation(fields: [municipioId], references: [id])
+  electores   Int?
 
   militantes Militante[]
   metas      MetaMilitantes[]

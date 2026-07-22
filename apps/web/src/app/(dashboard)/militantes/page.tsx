@@ -12,7 +12,7 @@ import { MilitanteForm } from "@/components/forms/MilitanteForm";
 import { MetasEditor } from "@/components/MetasEditor";
 import { ImportarMilitantesCSV } from "@/components/ImportarMilitantesCSV";
 import { DistritosMunicipales } from "@/components/DistritosMunicipales";
-import type { DemarcacionSeleccionada } from "@/components/MapaMilitantes";
+import type { DemarcacionSeleccionada, FiltrosMapa } from "@/components/MapaMilitantes";
 
 const MapaMilitantes = dynamic(
   () => import("@/components/MapaMilitantes").then((m) => m.MapaMilitantes),
@@ -38,6 +38,7 @@ export default function MilitantesPage() {
   const [militantes, setMilitantes] = useState<MilitanteRow[] | null>(null);
   const [q, setQ] = useState("");
   const [demarcacion, setDemarcacion] = useState<DemarcacionSeleccionada | null>(null);
+  const [filtrosMapa, setFiltrosMapa] = useState<FiltrosMapa>({});
   const [drawerAbierto, setDrawerAbierto] = useState(false);
   const [importarAbierto, setImportarAbierto] = useState(false);
   // Fuerza al mapa a refrescar sus conteos/colores tras registrar o importar
@@ -56,6 +57,11 @@ export default function MilitantesPage() {
         params.set("sinDistritoMunicipal", "true");
       }
     }
+    // Los filtros de la barra del mapa aplican también al padrón, para que la
+    // tabla muestre exactamente los mismos militantes que el mapa cuenta.
+    if (filtrosMapa.periodo) params.set("periodo", filtrosMapa.periodo);
+    if (filtrosMapa.origen) params.set("origen", filtrosMapa.origen);
+    if (filtrosMapa.capturadoPorId) params.set("capturadoPorId", filtrosMapa.capturadoPorId);
     const qs = params.toString();
     apiFetch<MilitanteRow[]>(`/militantes${qs ? `?${qs}` : ""}`).then(setMilitantes).catch(() => setMilitantes([]));
   }
@@ -65,7 +71,35 @@ export default function MilitantesPage() {
     setRefreshMapa((t) => t + 1);
   }
 
-  useEffect(cargar, [q, demarcacion?.tipo, demarcacion?.id]);
+  // Descarga el padrón visible (con los filtros/demarcación aplicados) a CSV.
+  function exportarCSV() {
+    if (!militantes || militantes.length === 0) return;
+    const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
+    const filas = [
+      ["Nombre", "Cédula", "Teléfono", "Provincia", "Municipio", "Localidad", "Recinto electoral", "Mesa", "Registrado"],
+      ...militantes.map((m) => [
+        m.nombre,
+        m.cedula,
+        m.telefono ?? "",
+        m.provincia.nombre,
+        m.municipio.nombre,
+        m.localidad?.nombre ?? "",
+        m.recintoElectoral?.nombre ?? "",
+        m.colegio?.numero ?? "",
+        new Date(m.createdAt).toLocaleDateString("es-DO"),
+      ]),
+    ];
+    // BOM para que Excel abra el archivo con acentos correctos.
+    const csv = "﻿" + filas.map((f) => f.map(esc).join(";")).join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `padron-${demarcacion ? demarcacion.nombre.toLowerCase().replace(/\s+/g, "-") : "completo"}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  useEffect(cargar, [q, demarcacion?.tipo, demarcacion?.id, filtrosMapa]);
 
   return (
     <div>
@@ -129,8 +163,10 @@ export default function MilitantesPage() {
             <div className="mx-auto max-w-[1100px]">
               <MapaMilitantes
                 compacto
+                herramientas
                 aspecto="aspect-[1000/850]"
                 onDemarcacionChange={setDemarcacion}
+                onFiltrosChange={setFiltrosMapa}
                 refreshToken={refreshMapa}
               />
             </div>
@@ -153,12 +189,22 @@ export default function MilitantesPage() {
                   </span>
                 )}
               </div>
-              <input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="Buscar por nombre, cédula o teléfono…"
-                className="w-72 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-institucional-600 focus:outline-none"
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="Buscar por nombre, cédula o teléfono…"
+                  className="w-72 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-institucional-600 focus:outline-none"
+                />
+                <button
+                  onClick={exportarCSV}
+                  disabled={!militantes || militantes.length === 0}
+                  className="rounded-lg border border-institucional-600 px-3 py-1.5 text-sm font-medium text-institucional-700 hover:bg-institucional-50 disabled:opacity-40"
+                  title="Descargar el padrón visible (con los filtros aplicados) como CSV"
+                >
+                  ⤓ CSV
+                </button>
+              </div>
             </div>
             {demarcacion && (
               <p className="mb-2 text-xs text-gray-400">

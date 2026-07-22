@@ -6,6 +6,7 @@ import { prisma } from "@cayena/database";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { asyncRoute, HttpError } from "../middleware/errorHandler";
 import { otorgarInsigniaBienvenida } from "../lib/gamificacion";
+import { calcularRango, type Periodo } from "../lib/periodo";
 
 function normalizarNombre(s: string): string {
   return s
@@ -119,6 +120,12 @@ const querySchema = z.object({
   sinDistritoMunicipal: z.enum(["true"]).optional(),
   desde: z.string().optional(),
   hasta: z.string().optional(),
+  // Mismo vocabulario de período que el mapa/dashboard (lib/periodo), para que
+  // el padrón filtrado por el mapa muestre exactamente los mismos militantes
+  // que el mapa está contando.
+  periodo: z.enum(["semana", "mes", "trimestre", "custom"]).optional(),
+  origen: z.enum(["BACKOFFICE", "APP_PUBLICA"]).optional(),
+  capturadoPorId: z.string().optional(),
   q: z.string().optional(),
 });
 
@@ -126,11 +133,17 @@ const querySchema = z.object({
 militantesRouter.get(
   "/",
   asyncRoute(async (req, res) => {
-    const { provinciaId, municipioId, distritoMunicipalId, sinDistritoMunicipal, desde, hasta, q } =
+    const { provinciaId, municipioId, distritoMunicipalId, sinDistritoMunicipal, desde, hasta, periodo, origen, capturadoPorId, q } =
       querySchema.parse(req.query);
     const fechaFilter: Record<string, Date> = {};
-    if (desde) fechaFilter.gte = new Date(desde);
-    if (hasta) fechaFilter.lte = new Date(hasta);
+    if (periodo) {
+      const rango = calcularRango(periodo as Periodo, desde, hasta);
+      fechaFilter.gte = rango.inicio;
+      fechaFilter.lte = rango.fin;
+    } else {
+      if (desde) fechaFilter.gte = new Date(desde);
+      if (hasta) fechaFilter.lte = new Date(hasta);
+    }
 
     const militantes = await prisma.militante.findMany({
       where: {
@@ -138,6 +151,8 @@ militantesRouter.get(
         ...(municipioId ? { municipioId } : {}),
         ...(distritoMunicipalId ? { distritoMunicipalId } : {}),
         ...(sinDistritoMunicipal === "true" ? { distritoMunicipalId: null } : {}),
+        ...(origen ? { origen } : {}),
+        ...(capturadoPorId ? { capturadoPorId } : {}),
         ...(Object.keys(fechaFilter).length ? { createdAt: fechaFilter } : {}),
         ...(q
           ? {
