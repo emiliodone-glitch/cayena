@@ -7,6 +7,7 @@ import { requireAuth, requireRole } from "../middleware/auth";
 import { asyncRoute, HttpError } from "../middleware/errorHandler";
 import { otorgarInsigniaBienvenida } from "../lib/gamificacion";
 import { calcularRango, type Periodo } from "../lib/periodo";
+import { emitirCambioMilitantes } from "../lib/eventos";
 
 function normalizarNombre(s: string): string {
   return s
@@ -42,6 +43,7 @@ militantesRouter.post(
       data: { ...data, origen: "APP_PUBLICA" },
     });
     await otorgarInsigniaBienvenida(militante.id);
+    emitirCambioMilitantes();
     res.status(201).json(militante);
   }),
 );
@@ -209,6 +211,7 @@ militantesRouter.post(
       data: { ...data, capturadoPorId: req.user!.id, origen: "BACKOFFICE" },
     });
     await otorgarInsigniaBienvenida(militante.id);
+    emitirCambioMilitantes();
     res.status(201).json(militante);
   }),
 );
@@ -345,6 +348,7 @@ militantesRouter.post(
       }
     }
 
+    if (creados > 0) emitirCambioMilitantes();
     res.status(201).json({
       total: filas.length,
       creados,

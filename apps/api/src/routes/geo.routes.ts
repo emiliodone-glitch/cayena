@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { prisma, loadProvinciasGeo, loadMunicipiosGeo, loadDistritosMunicipalesGeo } from "@cayena/database";
+import { prisma, Prisma, loadProvinciasGeo, loadMunicipiosGeo, loadDistritosMunicipalesGeo } from "@cayena/database";
 import { calcularEstadoAvance, calcularPorcentaje } from "@cayena/shared";
 import { asyncRoute } from "../middleware/errorHandler";
 import { calcularRango, type Periodo } from "../lib/periodo";
@@ -408,6 +408,58 @@ geoRouter.get(
       take: 5000,
     });
     res.json(puntos);
+  }),
+);
+
+// GET /geo/serie-diaria — captación día por día de una demarcación (últimos
+// N días, 14 por defecto), para la mini-tendencia del panel del mapa.
+geoRouter.get(
+  "/serie-diaria",
+  asyncRoute(async (req, res) => {
+    const alcance = z
+      .object({
+        provinciaId: z.string().optional(),
+        municipioId: z.string().optional(),
+        distritoMunicipalId: z.string().optional(),
+        sinDistritoMunicipal: z.enum(["true"]).optional(),
+        dias: z.coerce.number().int().min(3).max(60).optional(),
+      })
+      .parse(req.query);
+    const dias = alcance.dias ?? 14;
+    const fin = new Date();
+    fin.setHours(23, 59, 59, 999);
+    const inicio = new Date(fin);
+    inicio.setDate(inicio.getDate() - (dias - 1));
+    inicio.setHours(0, 0, 0, 0);
+
+    const condiciones = [Prisma.sql`"createdAt" >= ${inicio}`, Prisma.sql`"createdAt" <= ${fin}`];
+    if (alcance.provinciaId) condiciones.push(Prisma.sql`"provinciaId" = ${alcance.provinciaId}`);
+    if (alcance.municipioId) condiciones.push(Prisma.sql`"municipioId" = ${alcance.municipioId}`);
+    if (alcance.distritoMunicipalId) {
+      condiciones.push(Prisma.sql`"distritoMunicipalId" = ${alcance.distritoMunicipalId}`);
+    }
+    if (alcance.sinDistritoMunicipal === "true") {
+      condiciones.push(Prisma.sql`"distritoMunicipalId" IS NULL`);
+    }
+    const where = Prisma.join(condiciones, " AND ");
+
+    const filas = await prisma.$queryRaw<{ dia: Date; total: bigint }[]>`
+      SELECT date_trunc('day', "createdAt") as dia, COUNT(*) as total
+      FROM "Militante"
+      WHERE ${where}
+      GROUP BY dia
+      ORDER BY dia ASC
+    `;
+    const porDia = new Map(filas.map((f) => [f.dia.toISOString().slice(0, 10), Number(f.total)]));
+
+    const serie: { fecha: string; total: number }[] = [];
+    const cursor = new Date(inicio);
+    for (let i = 0; i < dias; i++) {
+      const clave = cursor.toISOString().slice(0, 10);
+      serie.push({ fecha: clave, total: porDia.get(clave) ?? 0 });
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    res.json(serie);
   }),
 );
 

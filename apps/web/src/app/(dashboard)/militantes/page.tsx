@@ -117,8 +117,9 @@ export default function MilitantesPage() {
               <button
                 onClick={() => setTab("metas")}
                 className={`rounded-md px-3 py-1 ${tab === "metas" ? "bg-institucional-600 text-white" : "text-gray-500"}`}
+                title="Metas de captación de militantes por territorio — distinto del POA de cada secretaría"
               >
-                Definir metas
+                Metas de militantes
               </button>
               <button
                 onClick={() => setTab("distritos")}

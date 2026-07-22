@@ -18,6 +18,13 @@ export function clearTokens() {
   localStorage.removeItem("cayena_refresh_token");
 }
 
+// Para EventSource (SSE): el navegador no permite mandar encabezados
+// personalizados en esa API, así que el token viaja como query param en la
+// URL en vez de en el header Authorization habitual — ver eventos.routes.ts.
+export function getAccessToken(): string | null {
+  return getTokens().accessToken;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,

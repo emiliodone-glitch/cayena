@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import Link from "next/link";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -141,6 +142,16 @@ export default function PoaPage() {
           </button>
         )}
       </div>
+
+      <p className="mb-6 -mt-3 text-xs text-gray-400">
+        Esto son los objetivos institucionales por secretaría. Si buscas las metas de{" "}
+        <span className="font-medium text-gray-500">captación de militantes</span> por provincia, municipio o
+        distrito municipal (las que colorean el mapa), están en{" "}
+        <Link href="/militantes" className="font-medium text-institucional-700 hover:underline">
+          Militantes → Metas de militantes
+        </Link>
+        .
+      </p>
 
       {chartData.length > 0 && (
         <div className="mb-8 h-72 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">

@@ -6,7 +6,7 @@ import type { Map as LeafletMap, Layer } from "leaflet";
 import * as L from "leaflet";
 import type { Feature, FeatureCollection, Polygon, MultiPolygon } from "geojson";
 import { COLOR_ESTADO, type EstadoAvance } from "@cayena/shared";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, API_URL, getAccessToken } from "@/lib/api";
 
 type Propiedades = {
   id: string;
@@ -68,6 +68,16 @@ type ResumenDemarcacion = {
 
 const COLOR_SIN_DATO = "#d1d5db";
 
+// El semáforo rojo/amarillo/verde es el clásico problema de accesibilidad
+// para daltonismo (confusión rojo-verde, la más común): estos símbolos dan
+// una segunda señal independiente del color, en la etiqueta del mapa, la
+// leyenda, el panel y el ranking.
+const SIMBOLO_ESTADO: Record<EstadoAvance, string> = {
+  rojo: "✕",
+  amarillo: "◐",
+  verde: "✓",
+};
+
 // Escala de verdes para el modo "penetración electoral" (captados/electores):
 // más oscuro = mayor porcentaje del electorado captado.
 function colorPenetracion(p: number | null | undefined): string {
@@ -80,6 +90,18 @@ function colorPenetracion(p: number | null | undefined): string {
   // 0% pero con dato de electores: verde casi blanco, distinguible del gris
   // "sin dato" — significa "medible, aún sin captación relevante".
   return "#dcfce7";
+}
+
+// Canvas reutilizado (nunca se agrega al DOM) solo para medir el ancho en
+// píxeles que ocupará un texto con la misma tipografía de .etiqueta-mapa —
+// necesario para detectar colisiones entre etiquetas del mapa.
+let contextoMedicion: CanvasRenderingContext2D | null | undefined;
+function medirTexto(texto: string): number {
+  if (contextoMedicion === undefined) {
+    contextoMedicion = typeof document !== "undefined" ? document.createElement("canvas").getContext("2d") : null;
+    if (contextoMedicion) contextoMedicion.font = "600 11px system-ui, sans-serif";
+  }
+  return contextoMedicion?.measureText(texto).width ?? texto.length * 7;
 }
 
 function construirQueryFiltros(f: FiltrosMapa): string {
@@ -139,6 +161,11 @@ export function MapaMilitantes({
   const [busqueda, setBusqueda] = useState("");
   const [busquedaAbierta, setBusquedaAbierta] = useState(false);
   const [promotores, setPromotores] = useState<{ id: string; nombre: string }[]>([]);
+  // Se incrementa cada vez que llega un evento en vivo (SSE) de que alguien
+  // registró/importó militantes en cualquier sesión — dispara el mismo
+  // refetch que `refreshToken`, pero sin depender de una acción propia.
+  const [refreshVivo, setRefreshVivo] = useState(0);
+  const [enVivo, setEnVivo] = useState(false);
 
   const mapRef = useRef<LeafletMap | null>(null);
   const geoLayerRef = useRef<L.GeoJSON | null>(null);
@@ -204,7 +231,7 @@ export function MapaMilitantes({
       })
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nivel, provinciaSeleccionada?.id, municipioSeleccionado?.id, refreshToken, filtros]);
+  }, [nivel, provinciaSeleccionada?.id, municipioSeleccionado?.id, refreshToken, refreshVivo, filtros]);
 
   // Capa opcional de puntos: ubicación GPS real de los militantes del alcance visible.
   useEffect(() => {
@@ -234,6 +261,47 @@ export function MapaMilitantes({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtros]);
 
+  // Refresco en vivo: cuando alguien registra o importa militantes en
+  // cualquier otra sesión (otra pestaña, otro promotor en su celular), este
+  // mapa se entera por Server-Sent Events y se refresca solo, sin recargar
+  // la página. Se reconecta con backoff si la conexión se cae, releyendo el
+  // token cada vez (por si venció y se renovó entretanto).
+  useEffect(() => {
+    let cerrado = false;
+    let fuente: EventSource | null = null;
+    let reintentoTimer: ReturnType<typeof setTimeout> | null = null;
+    let intentos = 0;
+
+    function conectar() {
+      if (cerrado) return;
+      const token = getAccessToken();
+      if (!token) return; // sin sesión (no debería pasar dentro del back office)
+
+      fuente = new EventSource(`${API_URL}/eventos/stream?token=${encodeURIComponent(token)}`);
+      fuente.addEventListener("cambio-militantes", () => setRefreshVivo((t) => t + 1));
+      fuente.onopen = () => {
+        intentos = 0;
+        setEnVivo(true);
+      };
+      fuente.onerror = () => {
+        setEnVivo(false);
+        fuente?.close();
+        if (cerrado) return;
+        // Backoff simple: 2s, 4s, 8s… hasta un tope de 30s.
+        const espera = Math.min(2000 * 2 ** intentos, 30000);
+        intentos++;
+        reintentoTimer = setTimeout(conectar, espera);
+      };
+    }
+
+    conectar();
+    return () => {
+      cerrado = true;
+      if (reintentoTimer) clearTimeout(reintentoTimer);
+      fuente?.close();
+    };
+  }, []);
+
   useEffect(() => {
     if (!geo) return;
 
@@ -255,22 +323,64 @@ export function MapaMilitantes({
     // Solo caben tantas etiquetas como espacio haya: mostrar el nombre de un
     // polígono minúsculo solo mancha el mapa. Tras cada encuadre se mide el
     // ancho en píxeles de cada demarcación y se muestran únicamente las
-    // etiquetas que caben razonablemente en su territorio.
+    // etiquetas que caben razonablemente en su territorio — y, entre las que
+    // caben, se evita que se amontonen unas sobre otras (típico en el
+    // sureste, con varias provincias chicas y pegadas): se prioriza la
+    // demarcación de mayor área y se oculta la etiqueta de cualquier vecina
+    // más chica cuyo rótulo se solaparía con uno ya colocado.
     function actualizarEtiquetas() {
       const map = mapRef.current;
       const layer = geoLayerRef.current;
       if (!map || !layer) return;
+
+      type Candidato = { path: L.Path; area: number; cx: number; cy: number; ancho: number; alto: number };
+      const candidatos: Candidato[] = [];
+      const descartados: L.Path[] = [];
+
       layer.eachLayer((l) => {
-        const path = l as L.Path & { getBounds?: () => L.LatLngBounds };
+        const path = l as L.Path & { getBounds?: () => L.LatLngBounds; feature?: Feature };
         if (!path.getBounds) return;
         const b = path.getBounds();
         const p1 = map.latLngToContainerPoint(b.getNorthWest());
         const p2 = map.latLngToContainerPoint(b.getSouthEast());
         const ancho = Math.abs(p2.x - p1.x);
         const altoPx = Math.abs(p2.y - p1.y);
-        if (ancho >= 52 && altoPx >= 22) (l as L.Path).openTooltip();
-        else (l as L.Path).closeTooltip();
+        if (ancho < 52 || altoPx < 22) {
+          descartados.push(path);
+          return;
+        }
+        const texto = path.getTooltip()?.getContent();
+        const nombreFeature = (path.feature?.properties as Propiedades | undefined)?.nombre ?? "";
+        const anchoTexto = medirTexto(typeof texto === "string" ? texto : nombreFeature);
+        candidatos.push({
+          path,
+          area: ancho * altoPx,
+          cx: (p1.x + p2.x) / 2,
+          cy: (p1.y + p2.y) / 2,
+          ancho: anchoTexto + 8,
+          alto: 16,
+        });
       });
+
+      // Las demarcaciones más grandes "ganan" el espacio cuando dos rótulos compiten.
+      candidatos.sort((a, b) => b.area - a.area);
+      const colocados: { x1: number; y1: number; x2: number; y2: number }[] = [];
+      const MARGEN = 3;
+
+      for (const c of candidatos) {
+        const rect = { x1: c.cx - c.ancho / 2, y1: c.cy - c.alto / 2, x2: c.cx + c.ancho / 2, y2: c.cy + c.alto / 2 };
+        const chocaConAlguno = colocados.some(
+          (r) =>
+            rect.x1 - MARGEN < r.x2 && rect.x2 + MARGEN > r.x1 && rect.y1 - MARGEN < r.y2 && rect.y2 + MARGEN > r.y1,
+        );
+        if (chocaConAlguno) {
+          c.path.closeTooltip();
+        } else {
+          colocados.push(rect);
+          c.path.openTooltip();
+        }
+      }
+      for (const path of descartados) path.closeTooltip();
     }
 
     // Encuadrar dentro del evento "add" de la capa (el enfoque anterior)
@@ -380,8 +490,10 @@ export function MapaMilitantes({
   function onEachFeature(feature: Feature, layer: Layer) {
     const props = feature.properties as Propiedades;
     // Etiqueta permanente con el nombre — cuál se muestra u oculta lo decide
-    // actualizarEtiquetas() según el tamaño en píxeles de cada polígono.
-    layer.bindTooltip(props.nombre, {
+    // actualizarEtiquetas() según el tamaño en píxeles de cada polígono. El
+    // símbolo de estado es independiente del modo de color (meta/electorado):
+    // sigue siendo información útil sobre el avance de la meta en cualquier vista.
+    layer.bindTooltip(`${SIMBOLO_ESTADO[props.estado] ?? ""} ${props.nombre}`, {
       permanent: true,
       direction: "center",
       className: "etiqueta-mapa",
@@ -643,9 +755,9 @@ export function MapaMilitantes({
             [COLOR_SIN_DATO, "Sin dato de electores"],
           ]
         : [
-            [COLOR_ESTADO.rojo, "Lejos de meta"],
-            [COLOR_ESTADO.amarillo, "En curso"],
-            [COLOR_ESTADO.verde, "Meta cumplida"],
+            [COLOR_ESTADO.rojo, `${SIMBOLO_ESTADO.rojo} Lejos de meta`],
+            [COLOR_ESTADO.amarillo, `${SIMBOLO_ESTADO.amarillo} En curso`],
+            [COLOR_ESTADO.verde, `${SIMBOLO_ESTADO.verde} Meta cumplida`],
           ];
     let lx = M;
     const ly = H - 28;
@@ -672,6 +784,32 @@ export function MapaMilitantes({
     panel?.captadosFiltrados !== undefined && panel?.captadosPrevio !== undefined
       ? panel.captadosFiltrados - panel.captadosPrevio
       : null;
+
+  // Mini-tendencia (sparkline) de los últimos 14 días de la demarcación
+  // seleccionada — complementa al ▲/▼ (que solo compara dos períodos) con
+  // la forma real de la curva día a día.
+  const [serieDiaria, setSerieDiaria] = useState<{ fecha: string; total: number }[] | null>(null);
+
+  useEffect(() => {
+    if (!panel) {
+      setSerieDiaria(null);
+      return;
+    }
+    const params = new URLSearchParams({ dias: "14" });
+    if (nivel === "nacional") params.set("provinciaId", panel.id);
+    else if (nivel === "municipios") params.set("municipioId", panel.id);
+    else if (panel.id) params.set("distritoMunicipalId", panel.id);
+    else if (municipioSeleccionado) {
+      params.set("municipioId", municipioSeleccionado.id);
+      params.set("sinDistritoMunicipal", "true");
+    } else {
+      setSerieDiaria(null);
+      return;
+    }
+    apiFetch<{ fecha: string; total: number }[]>(`/geo/serie-diaria?${params.toString()}`)
+      .then(setSerieDiaria)
+      .catch(() => setSerieDiaria(null));
+  }, [panel?.id, panel?.nombre, nivel, municipioSeleccionado?.id, refreshToken, refreshVivo]);
 
   return (
     <div>
@@ -752,6 +890,17 @@ export function MapaMilitantes({
           )}
 
           <div className="ml-auto flex items-center gap-2">
+            <span
+              className="flex items-center gap-1 text-xs text-gray-400"
+              title={
+                enVivo
+                  ? "Conectado en vivo: si alguien registra militantes en otra sesión, este mapa se refresca solo"
+                  : "Reconectando el refresco en vivo…"
+              }
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${enVivo ? "bg-green-500" : "bg-gray-300"}`} />
+              {enVivo ? "En vivo" : "Reconectando…"}
+            </span>
             <div className="flex rounded-lg border border-gray-200 bg-white p-0.5 text-xs">
               <button
                 onClick={() => setModoColor("meta")}
@@ -860,6 +1009,7 @@ export function MapaMilitantes({
                   (provinciaSeleccionada?.id ?? "") +
                   (municipioSeleccionado?.id ?? "") +
                   refreshToken +
+                  refreshVivo +
                   JSON.stringify(filtros)
                 }
                 ref={geoLayerRef}
@@ -889,15 +1039,18 @@ export function MapaMilitantes({
         {modoColor === "meta" ? (
           <>
             <span className="flex items-center gap-1">
-              <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.rojo }} /> Lejos de meta
+              <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.rojo }} />
+              <span aria-hidden>{SIMBOLO_ESTADO.rojo}</span> Lejos de meta
               <span className="font-semibold text-gray-700">{conteosLeyenda.rojo}</span>
             </span>
             <span className="flex items-center gap-1">
-              <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.amarillo }} /> En curso
+              <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.amarillo }} />
+              <span aria-hidden>{SIMBOLO_ESTADO.amarillo}</span> En curso
               <span className="font-semibold text-gray-700">{conteosLeyenda.amarillo}</span>
             </span>
             <span className="flex items-center gap-1">
-              <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.verde }} /> Meta cumplida
+              <span className="h-3 w-3 rounded-sm" style={{ background: COLOR_ESTADO.verde }} />
+              <span aria-hidden>{SIMBOLO_ESTADO.verde}</span> Meta cumplida
               <span className="font-semibold text-gray-700">{conteosLeyenda.verde}</span>
             </span>
             {conteosLeyenda.estancadas > 0 && (
@@ -956,7 +1109,7 @@ export function MapaMilitantes({
               <div>
                 <div className="text-xs uppercase text-gray-400">Avance</div>
                 <div className="text-base font-semibold" style={{ color: COLOR_ESTADO[panel.estado] }}>
-                  {panel.porcentaje}%
+                  <span aria-hidden>{SIMBOLO_ESTADO[panel.estado]}</span> {panel.porcentaje}%
                 </div>
               </div>
             </div>
@@ -989,6 +1142,12 @@ export function MapaMilitantes({
                     )}
                   </span>
                 )}
+                {serieDiaria && serieDiaria.some((d) => d.total > 0) && (
+                  <span className="flex items-center gap-2 text-gray-500">
+                    Últimos 14 días:
+                    <Sparkline datos={serieDiaria} />
+                  </span>
+                )}
               </div>
             )}
           </div>
@@ -1017,6 +1176,7 @@ export function MapaMilitantes({
                   >
                     <span className="flex items-center gap-2">
                       <span className="h-2.5 w-2.5 rounded-full" style={{ background: COLOR_ESTADO[p.estado] }} />
+                      <span aria-hidden className="text-xs">{SIMBOLO_ESTADO[p.estado]}</span>
                       {p.nombre}
                     </span>
                     <span className="shrink-0 text-xs text-gray-500">
@@ -1040,6 +1200,7 @@ export function MapaMilitantes({
                   >
                     <span className="flex items-center gap-2">
                       <span className="h-2.5 w-2.5 rounded-full" style={{ background: COLOR_ESTADO[p.estado] }} />
+                      <span aria-hidden className="text-xs">{SIMBOLO_ESTADO[p.estado]}</span>
                       {p.nombre}
                       {p.estancada && <span className="text-[10px] font-bold uppercase text-red-600">⚠</span>}
                     </span>
@@ -1054,5 +1215,24 @@ export function MapaMilitantes({
         </div>
       )}
     </div>
+  );
+}
+
+// Mini-gráfica de línea sin dependencias (sin recharts): un SVG chico con el
+// total diario de los últimos N días, para ver la forma de la curva de
+// captación de un vistazo junto al ▲/▼ del panel.
+function Sparkline({ datos }: { datos: { fecha: string; total: number }[] }) {
+  const W = 100;
+  const H = 24;
+  const max = Math.max(1, ...datos.map((d) => d.total));
+  const paso = datos.length > 1 ? W / (datos.length - 1) : W;
+  const puntos = datos.map((d, i) => `${i * paso},${H - (d.total / max) * (H - 2) - 1}`).join(" ");
+  const area = `0,${H} ${puntos} ${W},${H}`;
+
+  return (
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="overflow-visible">
+      <polygon points={area} fill="#1f7a34" fillOpacity={0.12} />
+      <polyline points={puntos} fill="none" stroke="#1f7a34" strokeWidth={1.5} strokeLinejoin="round" />
+    </svg>
   );
 }
