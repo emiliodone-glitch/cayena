@@ -17,6 +17,7 @@ type Propiedades = {
   porcentajePropia: number;
   electores?: number | null;
   porcentajePadron?: number | null;
+  metaObjetivo?: number | null;
   provinciaId?: string;
   esCabecera?: boolean;
 };
@@ -76,6 +77,29 @@ export function MapaDiaElectoral({
   const [modoColor, setModoColor] = useState<"propia" | "padron">("propia");
   const [refreshVivo, setRefreshVivo] = useState(0);
   const [enVivo, setEnVivo] = useState(false);
+  const [editandoMeta, setEditandoMeta] = useState(false);
+  const [metaInput, setMetaInput] = useState("");
+  const [guardandoMeta, setGuardandoMeta] = useState(false);
+
+  const puedeEditarMeta = user?.role === "SUPERADMIN" || user?.role === "JEFE_SECRETARIA";
+  const nivelMeta = nivel === "nacional" ? "provincia" : nivel === "municipios" ? "municipio" : "distrito";
+
+  async function guardarMeta() {
+    if (!panel?.id) return;
+    const porcentajeObjetivo = Number(metaInput);
+    if (!Number.isFinite(porcentajeObjetivo) || porcentajeObjetivo < 1 || porcentajeObjetivo > 100) return;
+    setGuardandoMeta(true);
+    try {
+      await apiFetch("/dia-electoral/metas", {
+        method: "POST",
+        body: JSON.stringify({ eventoId, nivel: nivelMeta, demarcacionId: panel.id, porcentajeObjetivo }),
+      });
+      setPanel((prev) => (prev ? { ...prev, metaObjetivo: porcentajeObjetivo } : prev));
+      setEditandoMeta(false);
+    } finally {
+      setGuardandoMeta(false);
+    }
+  }
 
   const mapRef = useRef<LeafletMap | null>(null);
   const geoLayerRef = useRef<L.GeoJSON | null>(null);
@@ -158,6 +182,14 @@ export function MapaDiaElectoral({
     geoLayerRef.current?.setStyle(estiloFeature);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modoColor]);
+
+  // Cierra el formulario de editar meta al cambiar de demarcación (hover u
+  // otra) — sin esto, quedaba abierto mostrando/editando la meta de la
+  // demarcación anterior.
+  useEffect(() => {
+    setEditandoMeta(false);
+    setMetaInput("");
+  }, [panel?.id]);
 
   function avisarDemarcacion(props: Propiedades) {
     if (!onDemarcacionChange || !props.id) return;
@@ -456,6 +488,62 @@ export function MapaDiaElectoral({
             </div>
             {panel.porcentajePadron != null && (
               <div className="mt-0.5 text-gray-500">{panel.porcentajePadron}% del padrón electoral ({panel.electores?.toLocaleString("es-DO")} electores)</div>
+            )}
+            {panel.id && (
+            <div className="mt-1.5 border-t border-gray-100 pt-1.5">
+              {editandoMeta ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    autoFocus
+                    value={metaInput}
+                    onChange={(e) => setMetaInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && guardarMeta()}
+                    className="w-14 rounded border border-gray-300 px-1.5 py-0.5 text-xs"
+                  />
+                  <span className="text-gray-400">%</span>
+                  <button
+                    onClick={guardarMeta}
+                    disabled={guardandoMeta}
+                    className="rounded bg-institucional-700 px-2 py-0.5 font-semibold text-white disabled:opacity-60"
+                  >
+                    Guardar
+                  </button>
+                  <button onClick={() => setEditandoMeta(false)} className="text-gray-400 hover:text-gray-600">
+                    ✕
+                  </button>
+                </div>
+              ) : panel.metaObjetivo != null ? (
+                <div className="flex items-center justify-between">
+                  <span className={panel.porcentajePropia >= panel.metaObjetivo ? "font-semibold text-institucional-700" : "text-amber-600"}>
+                    Meta: {panel.metaObjetivo}% {panel.porcentajePropia >= panel.metaObjetivo ? "✓ cumplida" : `(faltan ${Math.round((panel.metaObjetivo - panel.porcentajePropia) * 10) / 10} pts)`}
+                  </span>
+                  {puedeEditarMeta && (
+                    <button
+                      onClick={() => {
+                        setMetaInput(String(panel.metaObjetivo));
+                        setEditandoMeta(true);
+                      }}
+                      className="ml-1 shrink-0 text-gray-400 hover:text-institucional-700"
+                    >
+                      editar
+                    </button>
+                  )}
+                </div>
+              ) : puedeEditarMeta ? (
+                <button
+                  onClick={() => {
+                    setMetaInput("70");
+                    setEditandoMeta(true);
+                  }}
+                  className="text-institucional-700 hover:underline"
+                >
+                  + Definir meta
+                </button>
+              ) : null}
+            </div>
             )}
           </div>
         )}

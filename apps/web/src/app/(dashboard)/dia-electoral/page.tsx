@@ -3,12 +3,13 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { Vote, ScanLine, Download, CalendarPlus, Plus } from "lucide-react";
+import { Vote, ScanLine, Download, CalendarPlus, Plus, Search, Maximize2 } from "lucide-react";
 import { apiFetch, API_URL, getAccessToken, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/components/Toast";
 import { Drawer } from "@/components/Drawer";
 import type { DemarcacionElectoral } from "@/components/MapaDiaElectoral";
+import { ComparacionJornadas } from "@/components/ComparacionJornadas";
 
 const MapaDiaElectoral = dynamic(() => import("@/components/MapaDiaElectoral").then((m) => m.MapaDiaElectoral), {
   ssr: false,
@@ -24,10 +25,38 @@ type Resumen = {
   porcentajePropia: number;
   electoresNacional: number;
   porcentajePadron: number | null;
+  proyeccionFinal: number | null;
 };
 
-type Mesa = { id: string; numero: string; militantesRegistrados: number; votosConfirmados: number; porcentajePropia: number };
+type Mesa = {
+  id: string;
+  numero: string;
+  militantesRegistrados: number;
+  votosConfirmados: number;
+  porcentajePropia: number;
+  responsableId: string | null;
+  responsableNombre: string | null;
+  incidenciasAbiertas: number;
+};
 type Recinto = { id: string; nombre: string; direccion: string | null; mesas: Mesa[] };
+type Dirigente = { id: string; nombre: string; role: string };
+type Incidencia = {
+  id: string;
+  tipo: string;
+  descripcion: string;
+  resuelta: boolean;
+  createdAt: string;
+  reportadoPor: string;
+  mesaNumero: string;
+  recintoNombre: string;
+};
+
+const TIPOS_INCIDENCIA: { value: string; label: string }[] = [
+  { value: "PADRON_INCOMPLETO", label: "Padrón incompleto" },
+  { value: "MESA_CERRADA_TEMPRANO", label: "Mesa cerrada temprano" },
+  { value: "PROBLEMA_TECNICO", label: "Problema técnico" },
+  { value: "OTRA", label: "Otra" },
+];
 
 const fmtNum = new Intl.NumberFormat("es-DO");
 
@@ -35,6 +64,7 @@ export default function DiaElectoralPage() {
   const { user } = useAuth();
   const toast = useToast();
   const esSuperadmin = user?.role === "SUPERADMIN";
+  const puedeAsignarResponsable = user?.role === "SUPERADMIN" || user?.role === "JEFE_SECRETARIA" || user?.role === "PROMOTOR";
   // Cada jornada creada queda guardada — este selector permite seguir
   // monitoreando cualquier proceso anterior sin perderle acceso al crear uno
   // nuevo (crear una jornada solo cambia cuál es la "activa" para marcar
@@ -44,6 +74,12 @@ export default function DiaElectoralPage() {
   const [resumen, setResumen] = useState<Resumen | null>(null);
   const [demarcacion, setDemarcacion] = useState<DemarcacionElectoral | null>(null);
   const [recintos, setRecintos] = useState<Recinto[] | null>(null);
+  const [directorio, setDirectorio] = useState<Dirigente[]>([]);
+  const [incidencias, setIncidencias] = useState<Incidencia[] | null>(null);
+  const [reportando, setReportando] = useState<string | null>(null);
+  const [tipoNuevo, setTipoNuevo] = useState(TIPOS_INCIDENCIA[0].value);
+  const [descripcionNuevo, setDescripcionNuevo] = useState("");
+  const [enviandoIncidencia, setEnviandoIncidencia] = useState(false);
   const [refreshTicker, setRefreshTicker] = useState(0);
   const [drawerAbierto, setDrawerAbierto] = useState(false);
   const [nombreNuevo, setNombreNuevo] = useState("Elecciones Generales");
@@ -62,8 +98,26 @@ export default function DiaElectoralPage() {
   }
 
   useEffect(cargarEventos, []);
+  useEffect(() => {
+    apiFetch<Dirigente[]>("/usuarios/directorio").then(setDirectorio);
+  }, []);
 
   const evento = eventos?.find((e) => e.id === eventoId) ?? null;
+
+  async function asignarResponsable(colegioId: string, responsableId: string) {
+    const { responsableNombre } = await apiFetch<{ responsableId: string | null; responsableNombre: string | null }>(
+      `/dia-electoral/mesas/${colegioId}/responsable`,
+      { method: "PATCH", body: JSON.stringify({ responsableId: responsableId || null }) },
+    );
+    setRecintos((prev) =>
+      prev
+        ? prev.map((r) => ({
+            ...r,
+            mesas: r.mesas.map((m) => (m.id === colegioId ? { ...m, responsableId: responsableId || null, responsableNombre } : m)),
+          }))
+        : prev,
+    );
+  }
 
   useEffect(() => {
     if (!eventoId) return;
@@ -91,6 +145,7 @@ export default function DiaElectoralPage() {
     if (municipioMesasRef.current !== demarcacion.id) {
       municipioMesasRef.current = demarcacion.id;
       setRecintos(null);
+      setIncidencias(null);
     }
     let cancelado = false;
     const demarcacionId = demarcacion.id;
@@ -102,12 +157,48 @@ export default function DiaElectoralPage() {
         .catch(() => {
           if (!cancelado) setRecintos([]);
         });
+      apiFetch<Incidencia[]>(`/dia-electoral/incidencias?municipioId=${demarcacionId}&eventoId=${eventoId}`)
+        .then((data) => {
+          if (!cancelado) setIncidencias(data);
+        })
+        .catch(() => {
+          if (!cancelado) setIncidencias([]);
+        });
     }, 300);
     return () => {
       cancelado = true;
       clearTimeout(timer);
     };
   }, [demarcacion, eventoId, refreshTicker]);
+
+  async function reportarIncidencia(colegioId: string) {
+    if (!eventoId || !descripcionNuevo.trim()) return;
+    setEnviandoIncidencia(true);
+    try {
+      await apiFetch("/dia-electoral/incidencias", {
+        method: "POST",
+        body: JSON.stringify({ eventoId, colegioId, tipo: tipoNuevo, descripcion: descripcionNuevo.trim() }),
+      });
+      setRecintos((prev) =>
+        prev
+          ? prev.map((r) => ({
+              ...r,
+              mesas: r.mesas.map((m) => (m.id === colegioId ? { ...m, incidenciasAbiertas: m.incidenciasAbiertas + 1 } : m)),
+            }))
+          : prev,
+      );
+      setReportando(null);
+      setDescripcionNuevo("");
+      setRefreshTicker((t) => t + 1);
+    } finally {
+      setEnviandoIncidencia(false);
+    }
+  }
+
+  async function resolverIncidencia(id: string) {
+    await apiFetch(`/dia-electoral/incidencias/${id}`, { method: "PATCH", body: JSON.stringify({ resuelta: true }) });
+    setIncidencias((prev) => (prev ? prev.map((i) => (i.id === id ? { ...i, resuelta: true } : i)) : prev));
+  }
 
   // Ticker nacional en vivo: mismo canal SSE que el mapa, evento "cambio-votos".
   useEffect(() => {
@@ -236,12 +327,18 @@ export default function DiaElectoralPage() {
               <Plus className="h-4 w-4" /> Nueva jornada
             </button>
           )}
+          <Link href="/dia-electoral/buscar" className="flex items-center gap-1.5 rounded-lg border border-indigo-200 px-4 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50">
+            <Search className="h-4 w-4" /> Buscar militante
+          </Link>
           <Link href="/dia-electoral/marcar" className="flex items-center gap-1.5 rounded-lg border border-indigo-200 px-4 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50">
             <ScanLine className="h-4 w-4" /> Registrar votos
           </Link>
           <button onClick={exportarReporte} className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700">
             <Download className="h-4 w-4" /> Exportar reporte
           </button>
+          <Link href="/sala-situacion" className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50">
+            <Maximize2 className="h-4 w-4" /> Pantalla completa
+          </Link>
         </div>
       </div>
 
@@ -251,8 +348,13 @@ export default function DiaElectoralPage() {
           <Kpi label="Votos confirmados" value={fmtNum.format(resumen.votosConfirmados)} destacado />
           <Kpi label="% de la propia base" value={`${resumen.porcentajePropia}%`} />
           <Kpi label="% del padrón electoral" value={resumen.porcentajePadron != null ? `${resumen.porcentajePadron}%` : "—"} />
+          {resumen.proyeccionFinal != null && (
+            <Kpi label="Proyección al cierre" value={`${resumen.proyeccionFinal}%`} />
+          )}
         </div>
       )}
+
+      {eventoId && eventos && <ComparacionJornadas eventos={eventos} eventoIdActual={eventoId} />}
 
       {eventoId && <MapaDiaElectoral eventoId={eventoId} onDemarcacionChange={setDemarcacion} />}
 
@@ -280,14 +382,109 @@ export default function DiaElectoralPage() {
                   <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {r.mesas.map((m) => (
                       <div key={m.id} className="rounded-lg border border-gray-100 px-3 py-2 text-xs">
-                        <div className="font-semibold text-institucional-900">Mesa {m.numero}</div>
+                        <div className="flex items-center justify-between">
+                          <div className="font-semibold text-institucional-900">Mesa {m.numero}</div>
+                          {m.incidenciasAbiertas > 0 && (
+                            <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">
+                              {m.incidenciasAbiertas} inc.
+                            </span>
+                          )}
+                        </div>
                         <div className="text-gray-500">{m.votosConfirmados} de {m.militantesRegistrados} — {m.porcentajePropia}%</div>
+                        {puedeAsignarResponsable ? (
+                          <select
+                            value={m.responsableId ?? ""}
+                            onChange={(e) => asignarResponsable(m.id, e.target.value)}
+                            className="mt-1 w-full rounded border border-gray-200 bg-white px-1 py-0.5 text-[11px] text-gray-600"
+                          >
+                            <option value="">Sin fiscal asignado</option>
+                            {directorio.map((d) => (
+                              <option key={d.id} value={d.id}>
+                                {d.nombre}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <div className="mt-1 text-[11px] text-gray-400">
+                            {m.responsableNombre ? `Fiscal: ${m.responsableNombre}` : "Sin fiscal asignado"}
+                          </div>
+                        )}
+
+                        {reportando === m.id ? (
+                          <div className="mt-1.5 space-y-1 border-t border-gray-100 pt-1.5">
+                            <select
+                              value={tipoNuevo}
+                              onChange={(e) => setTipoNuevo(e.target.value)}
+                              className="w-full rounded border border-gray-200 px-1 py-0.5 text-[11px]"
+                            >
+                              {TIPOS_INCIDENCIA.map((t) => (
+                                <option key={t.value} value={t.value}>
+                                  {t.label}
+                                </option>
+                              ))}
+                            </select>
+                            <textarea
+                              value={descripcionNuevo}
+                              onChange={(e) => setDescripcionNuevo(e.target.value)}
+                              placeholder="Describe lo que pasó…"
+                              rows={2}
+                              className="w-full rounded border border-gray-200 px-1 py-0.5 text-[11px]"
+                            />
+                            <div className="flex gap-1">
+                              <button
+                                onClick={() => reportarIncidencia(m.id)}
+                                disabled={enviandoIncidencia || !descripcionNuevo.trim()}
+                                className="rounded bg-red-600 px-2 py-0.5 text-[11px] font-semibold text-white disabled:opacity-60"
+                              >
+                                Reportar
+                              </button>
+                              <button onClick={() => setReportando(null)} className="text-[11px] text-gray-400 hover:text-gray-600">
+                                Cancelar
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setReportando(m.id);
+                              setDescripcionNuevo("");
+                              setTipoNuevo(TIPOS_INCIDENCIA[0].value);
+                            }}
+                            className="mt-1 text-[11px] text-red-600 hover:underline"
+                          >
+                            + Reportar incidencia
+                          </button>
+                        )}
                       </div>
                     ))}
                     {r.mesas.length === 0 && <span className="text-xs text-gray-400">Sin mesas registradas</span>}
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {incidencias && incidencias.length > 0 && (
+            <div className="mt-4 border-t border-gray-100 pt-3">
+              <h3 className="mb-2 text-xs font-semibold uppercase text-gray-400">Incidencias reportadas</h3>
+              <div className="space-y-1.5">
+                {incidencias.map((i) => (
+                  <div key={i.id} className={`flex items-start justify-between gap-2 rounded-lg border px-3 py-2 text-xs ${i.resuelta ? "border-gray-100 bg-gray-50 text-gray-400" : "border-red-100 bg-red-50 text-red-700"}`}>
+                    <div>
+                      <div className="font-semibold">
+                        Mesa {i.mesaNumero} ({i.recintoNombre}) — {TIPOS_INCIDENCIA.find((t) => t.value === i.tipo)?.label ?? i.tipo}
+                      </div>
+                      <div>{i.descripcion}</div>
+                      <div className="mt-0.5 text-[10px] opacity-70">Reportado por {i.reportadoPor}</div>
+                    </div>
+                    {!i.resuelta && (
+                      <button onClick={() => resolverIncidencia(i.id)} className="shrink-0 whitespace-nowrap rounded border border-red-200 px-2 py-0.5 text-[11px] font-semibold hover:bg-red-100">
+                        Marcar resuelta
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>

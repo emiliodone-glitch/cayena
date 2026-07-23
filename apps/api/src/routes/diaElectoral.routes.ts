@@ -71,6 +71,56 @@ diaElectoralRouter.get(
 diaElectoralRouter.use(requireAuth);
 
 // ---------------------------------------------------------------------------
+// Buscador rápido de militante (RF nuevo): para quien está haciendo llamadas
+// de seguimiento y solo necesita saber "¿fulano ya votó?" sin navegar el
+// mapa — busca por cédula o nombre y devuelve su estado de confirmación
+// para la jornada indicada.
+// ---------------------------------------------------------------------------
+
+const buscarSchema = z.object({ query: z.string().min(2), eventoId: z.string() });
+
+diaElectoralRouter.get(
+  "/buscar",
+  asyncRoute(async (req, res) => {
+    const { query, eventoId } = buscarSchema.parse(req.query);
+    const militantes = await prisma.militante.findMany({
+      where: { OR: [{ cedula: { contains: query } }, { nombre: { contains: query, mode: "insensitive" } }] },
+      take: 15,
+      orderBy: { nombre: "asc" },
+      select: {
+        id: true,
+        nombre: true,
+        cedula: true,
+        telefono: true,
+        provincia: { select: { nombre: true } },
+        municipio: { select: { nombre: true } },
+      },
+    });
+    const confirmaciones = await prisma.confirmacionVoto.findMany({
+      where: { eventoId, militanteId: { in: militantes.map((m) => m.id) } },
+    });
+    const confirmadoMap = new Map(confirmaciones.map((c) => [c.militanteId, c]));
+
+    res.json(
+      militantes.map((m) => {
+        const confirmacion = confirmadoMap.get(m.id);
+        return {
+          id: m.id,
+          nombre: m.nombre,
+          cedula: m.cedula,
+          telefono: m.telefono,
+          provincia: m.provincia.nombre,
+          municipio: m.municipio.nombre,
+          confirmado: !!confirmacion,
+          metodo: confirmacion?.metodo ?? null,
+          confirmadoEn: confirmacion?.createdAt ?? null,
+        };
+      }),
+    );
+  }),
+);
+
+// ---------------------------------------------------------------------------
 // Gestión del evento electoral (SUPERADMIN) — solo uno puede estar activo.
 // ---------------------------------------------------------------------------
 
@@ -171,7 +221,12 @@ async function statsVotos(campo: CampoGeo, eventoId: string, whereMilitanteBase:
 
 type StatsVotos = Awaited<ReturnType<typeof statsVotos>>;
 
-function propsVotoDemarcacion(id: string | null, electores: number | null | undefined, stats: StatsVotos) {
+function propsVotoDemarcacion(
+  id: string | null,
+  electores: number | null | undefined,
+  stats: StatsVotos,
+  metaObjetivo?: number | null,
+) {
   const registrados = stats.registrados.get(id) ?? 0;
   const confirmados = stats.confirmados.get(id) ?? 0;
   return {
@@ -180,7 +235,113 @@ function propsVotoDemarcacion(id: string | null, electores: number | null | unde
     porcentajePropia: registrados > 0 ? Math.round((confirmados / registrados) * 1000) / 10 : confirmados > 0 ? 100 : 0,
     electores: electores ?? null,
     porcentajePadron: electores && electores > 0 ? Math.round((confirmados / electores) * 1000) / 10 : null,
+    metaObjetivo: metaObjetivo ?? null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Metas de participación por demarcación (RF nuevo): a diferencia de
+// MetaMilitantes (captación histórica, vigente por rango de fechas), acá la
+// meta es propia de UNA jornada electoral — "% de militantes propios que
+// deberían confirmar su voto" por provincia/municipio/distrito. Se guarda
+// como upsert simple (una fila por evento+demarcación) en vez de historial
+// versionado: no hace falta, la meta de una jornada ya pasada no cambia.
+// ---------------------------------------------------------------------------
+
+const metaNivelSchema = z.enum(["provincia", "municipio", "distrito"]);
+
+function campoDeNivel(nivel: z.infer<typeof metaNivelSchema>): "provinciaId" | "municipioId" | "distritoMunicipalId" {
+  if (nivel === "provincia") return "provinciaId";
+  if (nivel === "municipio") return "municipioId";
+  return "distritoMunicipalId";
+}
+
+async function metasPorDemarcacion(eventoId: string, campo: CampoGeo): Promise<Map<string, number>> {
+  const metas = await prisma.metaParticipacion.findMany({ where: { eventoId, [campo]: { not: null } } });
+  return new Map(metas.map((m) => [(m as unknown as Record<string, string>)[campo], m.porcentajeObjetivo]));
+}
+
+diaElectoralRouter.get(
+  "/metas",
+  asyncRoute(async (req, res) => {
+    const { eventoId } = z.object({ eventoId: z.string() }).parse(req.query);
+    const metas = await prisma.metaParticipacion.findMany({ where: { eventoId }, orderBy: { createdAt: "desc" } });
+    const [provincias, municipios, distritos] = await Promise.all([
+      prisma.provincia.findMany({ where: { id: { in: metas.flatMap((m) => (m.provinciaId ? [m.provinciaId] : [])) } } }),
+      prisma.municipio.findMany({ where: { id: { in: metas.flatMap((m) => (m.municipioId ? [m.municipioId] : [])) } } }),
+      prisma.distritoMunicipal.findMany({
+        where: { id: { in: metas.flatMap((m) => (m.distritoMunicipalId ? [m.distritoMunicipalId] : [])) } },
+      }),
+    ]);
+    const nombreDe = new Map<string, string>([
+      ...provincias.map((p) => [p.id, p.nombre] as const),
+      ...municipios.map((m) => [m.id, m.nombre] as const),
+      ...distritos.map((d) => [d.id, d.nombre] as const),
+    ]);
+    res.json(
+      metas.map((m) => {
+        const demarcacionId = m.provinciaId ?? m.municipioId ?? m.distritoMunicipalId ?? "";
+        const nivel = m.provinciaId ? "provincia" : m.municipioId ? "municipio" : "distrito";
+        return { id: m.id, nivel, demarcacionId, nombre: nombreDe.get(demarcacionId) ?? "—", porcentajeObjetivo: m.porcentajeObjetivo };
+      }),
+    );
+  }),
+);
+
+const metaSchema = z.object({
+  eventoId: z.string(),
+  nivel: metaNivelSchema,
+  demarcacionId: z.string(),
+  porcentajeObjetivo: z.number().int().min(1).max(100),
+});
+
+diaElectoralRouter.post(
+  "/metas",
+  requireRole("SUPERADMIN", "JEFE_SECRETARIA"),
+  asyncRoute(async (req, res) => {
+    const { eventoId, nivel, demarcacionId, porcentajeObjetivo } = metaSchema.parse(req.body);
+    const campo = campoDeNivel(nivel);
+    const existente = await prisma.metaParticipacion.findFirst({ where: { eventoId, [campo]: demarcacionId } });
+    const meta = existente
+      ? await prisma.metaParticipacion.update({ where: { id: existente.id }, data: { porcentajeObjetivo } })
+      : await prisma.metaParticipacion.create({ data: { eventoId, [campo]: demarcacionId, porcentajeObjetivo } });
+    res.status(existente ? 200 : 201).json(meta);
+  }),
+);
+
+diaElectoralRouter.delete(
+  "/metas/:id",
+  requireRole("SUPERADMIN", "JEFE_SECRETARIA"),
+  asyncRoute(async (req, res) => {
+    await prisma.metaParticipacion.delete({ where: { id: req.params.id } });
+    res.status(204).end();
+  }),
+);
+
+// Proyección de participación final (RF nuevo): extrapola linealmente el
+// ritmo de confirmaciones visto hasta ahora contra lo que falta de la
+// ventana de votación — mismo horario típico de RD (6am-5pm) que ya usa
+// verificarBajaParticipacionCierre en lib/alertasVotacion.ts. Solo tiene
+// sentido para una jornada de HOY y dentro de esa ventana; fuera de ella
+// (jornada pasada, o antes/después de horario) se devuelve null en vez de
+// una cifra que no significaría nada.
+const HORA_APERTURA_VOTACION = 6;
+const HORA_CIERRE_VOTACION_RESUMEN = 17;
+
+function proyeccionParticipacion(fechaEvento: Date, porcentajeActual: number): number | null {
+  const ahora = new Date();
+  const esHoy =
+    fechaEvento.getFullYear() === ahora.getFullYear() &&
+    fechaEvento.getMonth() === ahora.getMonth() &&
+    fechaEvento.getDate() === ahora.getDate();
+  if (!esHoy) return null;
+
+  const horaActual = ahora.getHours() + ahora.getMinutes() / 60;
+  if (horaActual <= HORA_APERTURA_VOTACION || horaActual >= HORA_CIERRE_VOTACION_RESUMEN) return null;
+
+  const fraccionTranscurrida = (horaActual - HORA_APERTURA_VOTACION) / (HORA_CIERRE_VOTACION_RESUMEN - HORA_APERTURA_VOTACION);
+  const proyeccion = porcentajeActual / fraccionTranscurrida;
+  return Math.round(Math.min(100, proyeccion) * 10) / 10;
 }
 
 diaElectoralRouter.get(
@@ -194,13 +355,15 @@ diaElectoralRouter.get(
       prisma.provincia.aggregate({ _sum: { electores: true } }),
     ]);
     const electoresNacional = padron._sum.electores ?? 0;
+    const porcentajePropia = militantesRegistrados > 0 ? Math.round((votosConfirmados / militantesRegistrados) * 1000) / 10 : 0;
     res.json({
       evento,
       militantesRegistrados,
       votosConfirmados,
-      porcentajePropia: militantesRegistrados > 0 ? Math.round((votosConfirmados / militantesRegistrados) * 1000) / 10 : 0,
+      porcentajePropia,
       electoresNacional,
       porcentajePadron: electoresNacional > 0 ? Math.round((votosConfirmados / electoresNacional) * 1000) / 10 : null,
+      proyeccionFinal: proyeccionParticipacion(evento.fecha, porcentajePropia),
     });
   }),
 );
@@ -211,9 +374,10 @@ diaElectoralRouter.get(
     const { eventoId } = z.object({ eventoId: z.string() }).parse(req.query);
     const alcanceUsuario = await resolverAlcance(req.user!);
     const geo = loadProvinciasGeo();
-    const [stats, provincias] = await Promise.all([
+    const [stats, provincias, metas] = await Promise.all([
       statsVotos("provinciaId", eventoId),
       prisma.provincia.findMany({ select: { id: true, electores: true } }),
+      metasPorDemarcacion(eventoId, "provinciaId"),
     ]);
     const electoresMap = new Map(provincias.map((p) => [p.id, p.electores]));
 
@@ -221,7 +385,7 @@ diaElectoralRouter.get(
       .filter((f) => puedeVerProvincia(alcanceUsuario, String(f.properties?.id)))
       .map((f) => {
         const id = String(f.properties?.id);
-        return { ...f, properties: { ...f.properties, ...propsVotoDemarcacion(id, electoresMap.get(id), stats) } };
+        return { ...f, properties: { ...f.properties, ...propsVotoDemarcacion(id, electoresMap.get(id), stats, metas.get(id)) } };
       });
 
     res.json({ type: "FeatureCollection", features });
@@ -241,11 +405,14 @@ diaElectoralRouter.get(
     if (!puedeVerProvincia(alcanceUsuario, provinciaId)) throw new HttpError(403, "No tienes acceso a esta provincia");
 
     const provincia = await prisma.provincia.findUniqueOrThrow({ where: { id: provinciaId } });
-    const stats = await statsVotos("provinciaId", eventoId, { provinciaId });
+    const [stats, metas] = await Promise.all([
+      statsVotos("provinciaId", eventoId, { provinciaId }),
+      metasPorDemarcacion(eventoId, "provinciaId"),
+    ]);
     res.json({
       id: provincia.id,
       nombre: provincia.nombre,
-      ...propsVotoDemarcacion(provinciaId, provincia.electores, stats),
+      ...propsVotoDemarcacion(provinciaId, provincia.electores, stats, metas.get(provinciaId)),
     });
   }),
 );
@@ -264,15 +431,16 @@ diaElectoralRouter.get(
       featuresProv = featuresProv.filter((f) => f.properties?.id === alcanceUsuario.municipioId);
     }
 
-    const [stats, municipios] = await Promise.all([
+    const [stats, municipios, metas] = await Promise.all([
       statsVotos("municipioId", eventoId, { provinciaId }),
       prisma.municipio.findMany({ where: { provinciaId }, select: { id: true, electores: true } }),
+      metasPorDemarcacion(eventoId, "municipioId"),
     ]);
     const electoresMap = new Map(municipios.map((m) => [m.id, m.electores]));
 
     const features = featuresProv.map((f) => {
       const id = String(f.properties?.id);
-      return { ...f, properties: { ...f.properties, ...propsVotoDemarcacion(id, electoresMap.get(id), stats) } };
+      return { ...f, properties: { ...f.properties, ...propsVotoDemarcacion(id, electoresMap.get(id), stats, metas.get(id)) } };
     });
 
     res.json({ type: "FeatureCollection", features });
@@ -338,7 +506,10 @@ diaElectoralRouter.get(
       resueltos = resueltos.filter((r) => r.distrito?.id === alcanceUsuario.distritoMunicipalId);
     }
 
-    const stats = await statsVotos("distritoMunicipalId", eventoId, { municipioId });
+    const [stats, metas] = await Promise.all([
+      statsVotos("distritoMunicipalId", eventoId, { municipioId }),
+      metasPorDemarcacion(eventoId, "distritoMunicipalId"),
+    ]);
 
     const features = resueltos.map(({ feature, distrito }) => {
       if (!distrito) {
@@ -353,7 +524,7 @@ diaElectoralRouter.get(
           ...feature.properties,
           id: distrito.id,
           nombre: distrito.nombre,
-          ...propsVotoDemarcacion(distrito.id, distrito.electores, stats),
+          ...propsVotoDemarcacion(distrito.id, distrito.electores, stats, metas.get(distrito.id)),
         },
       };
     });
@@ -381,16 +552,21 @@ diaElectoralRouter.get(
 
     const recintos = await prisma.recintoElectoral.findMany({
       where: { localidad: { municipioId } },
-      include: { colegios: true },
+      include: { colegios: { include: { responsable: { select: { id: true, nombre: true } } } } },
       orderBy: { nombre: "asc" },
     });
 
     const colegioIds = recintos.flatMap((r) => r.colegios.map((c) => c.id));
-    const [registradosPorColegio, confirmadosPorColegio] = await Promise.all([
+    const [registradosPorColegio, confirmadosPorColegio, incidenciasPorColegio] = await Promise.all([
       prisma.militante.groupBy({ by: ["colegioId"], where: { colegioId: { in: colegioIds } }, _count: { _all: true } }),
       prisma.confirmacionVoto.findMany({
         where: { eventoId, militante: { colegioId: { in: colegioIds } } },
         select: { militante: { select: { colegioId: true } } },
+      }),
+      prisma.incidenciaMesa.groupBy({
+        by: ["colegioId"],
+        where: { eventoId, colegioId: { in: colegioIds }, resuelta: false },
+        _count: { _all: true },
       }),
     ]);
     const registradosMap = new Map(registradosPorColegio.map((r) => [r.colegioId as string, r._count._all]));
@@ -399,6 +575,7 @@ diaElectoralRouter.get(
       const id = c.militante.colegioId!;
       confirmadosMap.set(id, (confirmadosMap.get(id) ?? 0) + 1);
     }
+    const incidenciasMap = new Map(incidenciasPorColegio.map((i) => [i.colegioId, i._count._all]));
 
     const resultado = recintos.map((r) => ({
       id: r.id,
@@ -413,10 +590,99 @@ diaElectoralRouter.get(
           militantesRegistrados: registrados,
           votosConfirmados: confirmados,
           porcentajePropia: registrados > 0 ? Math.round((confirmados / registrados) * 1000) / 10 : confirmados > 0 ? 100 : 0,
+          responsableId: c.responsableId,
+          responsableNombre: c.responsable?.nombre ?? null,
+          incidenciasAbiertas: incidenciasMap.get(c.id) ?? 0,
         };
       }),
     }));
 
     res.json(resultado);
+  }),
+);
+
+// Asignar/quitar el fiscal-promotor responsable de una mesa (RF nuevo): si
+// esa mesa queda rezagada cerca del cierre, la alerta le llega a esta
+// persona puntual en vez de solo al panel general (ver
+// lib/alertasVotacion.ts). Mandar responsableId: null para quitar la
+// asignación.
+const responsableMesaSchema = z.object({ responsableId: z.string().nullable() });
+
+diaElectoralRouter.patch(
+  "/mesas/:colegioId/responsable",
+  requireRole("SUPERADMIN", "JEFE_SECRETARIA", "PROMOTOR"),
+  asyncRoute(async (req, res) => {
+    const { responsableId } = responsableMesaSchema.parse(req.body);
+    const colegio = await prisma.colegio.update({
+      where: { id: req.params.colegioId },
+      data: { responsableId },
+      include: { responsable: { select: { id: true, nombre: true } } },
+    });
+    res.json({ id: colegio.id, responsableId: colegio.responsableId, responsableNombre: colegio.responsable?.nombre ?? null });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Incidencias por mesa (RF nuevo): a diferencia de ConfirmacionVoto (el
+// conteo de participación, secreto), esto documenta problemas OPERATIVOS del
+// día — padrón incompleto, mesa cerrada antes de hora, etc. — para
+// seguimiento/reclamos posteriores. No altera ninguna cifra de participación.
+// ---------------------------------------------------------------------------
+
+const incidenciaSchema = z.object({
+  eventoId: z.string(),
+  colegioId: z.string(),
+  tipo: z.enum(["PADRON_INCOMPLETO", "MESA_CERRADA_TEMPRANO", "PROBLEMA_TECNICO", "OTRA"]),
+  descripcion: z.string().min(3),
+});
+
+diaElectoralRouter.post(
+  "/incidencias",
+  asyncRoute(async (req, res) => {
+    const data = incidenciaSchema.parse(req.body);
+    const incidencia = await prisma.incidenciaMesa.create({
+      data: { ...data, reportadoPorId: req.user!.id },
+      include: { reportadoPor: { select: { nombre: true } }, colegio: { select: { numero: true } } },
+    });
+    res.status(201).json(incidencia);
+  }),
+);
+
+diaElectoralRouter.get(
+  "/incidencias",
+  asyncRoute(async (req, res) => {
+    const { eventoId, municipioId } = z.object({ eventoId: z.string(), municipioId: z.string().optional() }).parse(req.query);
+    const incidencias = await prisma.incidenciaMesa.findMany({
+      where: {
+        eventoId,
+        ...(municipioId ? { colegio: { recintoElectoral: { localidad: { municipioId } } } } : {}),
+      },
+      include: {
+        reportadoPor: { select: { nombre: true } },
+        colegio: { select: { numero: true, recintoElectoral: { select: { nombre: true } } } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(
+      incidencias.map((i) => ({
+        id: i.id,
+        tipo: i.tipo,
+        descripcion: i.descripcion,
+        resuelta: i.resuelta,
+        createdAt: i.createdAt,
+        reportadoPor: i.reportadoPor.nombre,
+        mesaNumero: i.colegio.numero,
+        recintoNombre: i.colegio.recintoElectoral.nombre,
+      })),
+    );
+  }),
+);
+
+diaElectoralRouter.patch(
+  "/incidencias/:id",
+  asyncRoute(async (req, res) => {
+    const { resuelta } = z.object({ resuelta: z.boolean() }).parse(req.body);
+    const incidencia = await prisma.incidenciaMesa.update({ where: { id: req.params.id }, data: { resuelta } });
+    res.json(incidencia);
   }),
 );

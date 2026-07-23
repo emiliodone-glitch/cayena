@@ -43,18 +43,19 @@ enum TipoMovimiento {
 // ---------------------------------------------------------------------------
 
 model Provincia {
-  id     String @id // slug, coincide con properties.id del GeoJSON
-  codigo String @unique // ISO 3166-2:DO, ej. DO-25
-  nombre String
+  id        String @id // slug, coincide con properties.id del GeoJSON
+  codigo    String @unique // ISO 3166-2:DO, ej. DO-25
+  nombre    String
   // Electores hábiles según el padrón de la JCE (para calcular penetración
   // electoral en el mapa). Nulo hasta que se importe con import-electores.ts.
   electores Int?
 
-  municipios Municipio[]
-  militantes Militante[]
-  obras      Obra[]
-  metas      MetaMilitantes[]
-  responsables User[] @relation("ResponsableProvincia")
+  municipios         Municipio[]
+  militantes         Militante[]
+  obras              Obra[]
+  metas              MetaMilitantes[]
+  metasParticipacion MetaParticipacion[]
+  responsables       User[]              @relation("ResponsableProvincia")
 
   createdAt DateTime @default(now())
 }
@@ -69,9 +70,10 @@ model Municipio {
   militantes           Militante[]
   obras                Obra[]
   metas                MetaMilitantes[]
+  metasParticipacion   MetaParticipacion[]
   distritosMunicipales DistritoMunicipal[]
   localidades          Localidad[]
-  responsables         User[] @relation("ResponsableMunicipio")
+  responsables         User[]              @relation("ResponsableMunicipio")
 
   createdAt DateTime @default(now())
 
@@ -89,9 +91,10 @@ model DistritoMunicipal {
   municipio   Municipio @relation(fields: [municipioId], references: [id])
   electores   Int?
 
-  militantes Militante[]
-  metas      MetaMilitantes[]
-  responsables User[] @relation("ResponsableDistrito")
+  militantes         Militante[]
+  metas              MetaMilitantes[]
+  metasParticipacion MetaParticipacion[]
+  responsables       User[]              @relation("ResponsableDistrito")
 
   createdAt DateTime @default(now())
 
@@ -141,12 +144,21 @@ model Colegio {
   recintoElectoralId String
   recintoElectoral   RecintoElectoral @relation(fields: [recintoElectoralId], references: [id])
 
-  militantes Militante[]
+  // Fiscal/promotor a cargo de esta mesa el día electoral (RF nuevo): si la
+  // mesa queda rezagada, la alerta le llega a esta persona puntual en vez de
+  // solo al panel general — mismo patrón que ya usan las alertas de POA
+  // dirigidas a un responsable de territorio.
+  responsableId String?
+  responsable   User?   @relation("ResponsableMesa", fields: [responsableId], references: [id])
+
+  militantes  Militante[]
+  incidencias IncidenciaMesa[]
 
   createdAt DateTime @default(now())
 
   @@unique([recintoElectoralId, numero])
   @@index([recintoElectoralId])
+  @@index([responsableId])
 }
 
 // ---------------------------------------------------------------------------
@@ -163,8 +175,8 @@ model User {
   active       Boolean @default(true)
 
   // Alcance del promotor/jefe de secretaría
-  secretariaId String?
-  secretaria   Secretaria? @relation(fields: [secretariaId], references: [id])
+  secretariaId    String?
+  secretaria      Secretaria? @relation(fields: [secretariaId], references: [id])
   // Rol dentro del equipo de la secretaría (ej. "Titular", "Vocal",
   // "Coordinador provincial") — solo tiene sentido con secretariaId puesto.
   // Quién es el TITULAR formal (el cargo, no cualquier miembro del equipo)
@@ -186,29 +198,31 @@ model User {
   // conserva la visibilidad nacional de siempre (compatibilidad con las
   // cuentas ya existentes). SUPERADMIN y AUDITOR siempre ven todo el país
   // sin importar si tienen algo asignado acá.
-  provinciaId String?
-  provincia   Provincia? @relation("ResponsableProvincia", fields: [provinciaId], references: [id])
-  municipioId String?
-  municipio   Municipio? @relation("ResponsableMunicipio", fields: [municipioId], references: [id])
+  provinciaId         String?
+  provincia           Provincia?         @relation("ResponsableProvincia", fields: [provinciaId], references: [id])
+  municipioId         String?
+  municipio           Municipio?         @relation("ResponsableMunicipio", fields: [municipioId], references: [id])
   distritoMunicipalId String?
   distritoMunicipal   DistritoMunicipal? @relation("ResponsableDistrito", fields: [distritoMunicipalId], references: [id])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  actividadesCreadas Actividad[]    @relation("ActividadCreador")
-  obrasCreadas       Obra[]         @relation("ObraCreador")
-  militantesCaptados Militante[]    @relation("MilitanteCapturador")
-  gastosRegistrados  Gasto[]        @relation("GastoRegistrador")
-  avancesRegistrados AvancePOA[]    @relation("AvanceRegistrador")
-  refreshTokens      RefreshToken[]
-  notificacionesRecibidas Notificacion[] @relation("NotificacionDestinatario")
-  deviceTokens       DeviceToken[]
-  secretariasComoTitular    Secretaria[]                 @relation("TitularActual")
-  historialTitularidades    HistorialTitularSecretaria[] @relation("HistorialTitular")
-  informesSubidos           InformeSecretaria[]          @relation("InformeAutor")
-  checkInsRegistrados       AsistenciaActividad[]        @relation("CheckInRegistrador")
-  confirmacionesVotoComoFiscal ConfirmacionVoto[]        @relation("ConfirmacionVotoFiscal")
+  actividadesCreadas           Actividad[]                  @relation("ActividadCreador")
+  obrasCreadas                 Obra[]                       @relation("ObraCreador")
+  militantesCaptados           Militante[]                  @relation("MilitanteCapturador")
+  gastosRegistrados            Gasto[]                      @relation("GastoRegistrador")
+  avancesRegistrados           AvancePOA[]                  @relation("AvanceRegistrador")
+  refreshTokens                RefreshToken[]
+  notificacionesRecibidas      Notificacion[]               @relation("NotificacionDestinatario")
+  deviceTokens                 DeviceToken[]
+  secretariasComoTitular       Secretaria[]                 @relation("TitularActual")
+  historialTitularidades       HistorialTitularSecretaria[] @relation("HistorialTitular")
+  informesSubidos              InformeSecretaria[]          @relation("InformeAutor")
+  checkInsRegistrados          AsistenciaActividad[]        @relation("CheckInRegistrador")
+  confirmacionesVotoComoFiscal ConfirmacionVoto[]           @relation("ConfirmacionVotoFiscal")
+  mesasComoResponsable         Colegio[]                    @relation("ResponsableMesa")
+  incidenciasReportadas        IncidenciaMesa[]             @relation("IncidenciaReportador")
 }
 
 model RefreshToken {
@@ -242,12 +256,12 @@ model Secretaria {
   // duplica ese dato acá.
   presupuestoAsignado Decimal? @db.Decimal(14, 2)
 
-  usuarios          User[]
-  actividades       Actividad[]
-  documentos        DocumentoSecretaria[]
-  gastos            Gasto[]
-  metasPoa          MetaPOA[]
-  informes          InformeSecretaria[]
+  usuarios           User[]
+  actividades        Actividad[]
+  documentos         DocumentoSecretaria[]
+  gastos             Gasto[]
+  metasPoa           MetaPOA[]
+  informes           InformeSecretaria[]
   historialTitulares HistorialTitularSecretaria[]
 
   createdAt DateTime @default(now())
@@ -271,14 +285,14 @@ model DocumentoSecretaria {
 // momento de la designación: si el usuario cambia de nombre después, o la
 // cuenta se reutiliza, el historial no se reescribe solo.
 model HistorialTitularSecretaria {
-  id           String     @id @default(cuid())
-  secretariaId String
-  secretaria   Secretaria @relation(fields: [secretariaId], references: [id])
-  userId       String
-  user         User       @relation("HistorialTitular", fields: [userId], references: [id])
+  id            String     @id @default(cuid())
+  secretariaId  String
+  secretaria    Secretaria @relation(fields: [secretariaId], references: [id])
+  userId        String
+  user          User       @relation("HistorialTitular", fields: [userId], references: [id])
   nombreTitular String
-  desde        DateTime   @default(now())
-  hasta        DateTime?
+  desde         DateTime   @default(now())
+  hasta         DateTime?
 
   createdAt DateTime @default(now())
 
@@ -368,20 +382,20 @@ model AsistenciaActividad {
 // ---------------------------------------------------------------------------
 
 model Obra {
-  id        String        @id @default(cuid())
-  titulo    String
-  resena    String
-  categoria CategoriaObra
+  id         String        @id @default(cuid())
+  titulo     String
+  resena     String
+  categoria  CategoriaObra
   // Fotos "después"/estado actual — el nombre se mantiene por compatibilidad
   // con datos ya cargados; fotosAntes es la galería nueva de comparación.
   fotos      String[]
-  fotosAntes String[] @default([])
+  fotosAntes String[]      @default([])
   lat        Float
   lng        Float
   // Referencia de dirección en texto libre (ej. "Calle Duarte esq. Mella"),
   // buscada con el mismo autocompletado de lugares que Actividades — separada
   // de provincia/municipio, que siguen siendo la demarcación oficial.
-  direccion String?
+  direccion  String?
 
   // Datos de una obra ya concluida (RF: catálogo de logros de gobierno) — a
   // diferencia de Actividades, esto no es un tracker de obras en curso.
@@ -446,8 +460,8 @@ model Militante {
   puntos    Int                 @default(0)
   insignias MilitanteInsignia[]
 
-  asistencias  AsistenciaActividad[]
-  deviceTokens DeviceToken[]
+  asistencias        AsistenciaActividad[]
+  deviceTokens       DeviceToken[]
   confirmacionesVoto ConfirmacionVoto[]
 
   createdAt DateTime @default(now())
@@ -481,11 +495,86 @@ model EventoElectoral {
   // la BD) — es el que usan por defecto el mapa y el botón "Ya voté".
   activo Boolean  @default(true)
 
-  confirmaciones ConfirmacionVoto[]
+  confirmaciones     ConfirmacionVoto[]
+  metasParticipacion MetaParticipacion[]
+  recordatorios      RecordatorioVoto[]
+  incidencias        IncidenciaMesa[]
 
   createdAt DateTime @default(now())
 
   @@index([activo])
+}
+
+// Control de envío de los recordatorios push a militantes que aún no han
+// confirmado su voto (ver lib/recordatorioVoto.ts) — el job corre cada
+// cierto tiempo pero solo debe mandar el push una vez por cada horario fijo
+// del día (ej. "14:00", "17:00"); esta fila marca ese horario como ya
+// cubierto para el evento, igual que Actividad.recordatorioEnviado evita
+// reenviar el aviso de "faltan 24h" en cada corrida del chequeo periódico.
+model RecordatorioVoto {
+  id        String          @id @default(cuid())
+  eventoId  String
+  evento    EventoElectoral @relation(fields: [eventoId], references: [id], onDelete: Cascade)
+  hora      String // "14:00", "17:00" — horario fijo ya cubierto
+  enviados  Int             @default(0)
+  createdAt DateTime        @default(now())
+
+  @@unique([eventoId, hora])
+}
+
+// Meta de participación por demarcación y jornada electoral (RF nuevo): a
+// diferencia de MetaMilitantes (captación histórica, con vigencia por
+// rango de fechas), acá la meta es específica de UN EventoElectoral — cada
+// jornada puede tener su propio objetivo de "% de militantes propios que
+// confirmen su voto" por provincia/municipio/distrito. Exactamente una de
+// las tres demarcaciones debe ir puesta (se valida en la app).
+model MetaParticipacion {
+  id       String          @id @default(cuid())
+  eventoId String
+  evento   EventoElectoral @relation(fields: [eventoId], references: [id], onDelete: Cascade)
+
+  provinciaId         String?
+  provincia           Provincia?         @relation(fields: [provinciaId], references: [id], onDelete: Cascade)
+  municipioId         String?
+  municipio           Municipio?         @relation(fields: [municipioId], references: [id], onDelete: Cascade)
+  distritoMunicipalId String?
+  distritoMunicipal   DistritoMunicipal? @relation(fields: [distritoMunicipalId], references: [id], onDelete: Cascade)
+
+  porcentajeObjetivo Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([eventoId])
+  @@index([provinciaId])
+  @@index([municipioId])
+  @@index([distritoMunicipalId])
+}
+
+// Incidencia reportada en una mesa (RF nuevo): a diferencia de
+// ConfirmacionVoto (el conteo de participación, secreto e individual),
+// esto documenta problemas OPERATIVOS del día — padrón incompleto, mesa
+// cerrada antes de hora, etc. — útil para seguimiento/reclamos posteriores,
+// no altera ninguna cifra de participación.
+model IncidenciaMesa {
+  id        String          @id @default(cuid())
+  eventoId  String
+  evento    EventoElectoral @relation(fields: [eventoId], references: [id], onDelete: Cascade)
+  colegioId String
+  colegio   Colegio         @relation(fields: [colegioId], references: [id], onDelete: Cascade)
+
+  tipo        String // PADRON_INCOMPLETO | MESA_CERRADA_TEMPRANO | PROBLEMA_TECNICO | OTRA
+  descripcion String
+
+  reportadoPorId String
+  reportadoPor   User   @relation("IncidenciaReportador", fields: [reportadoPorId], references: [id])
+
+  resuelta Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([eventoId])
+  @@index([colegioId])
 }
 
 model ConfirmacionVoto {
@@ -582,38 +671,38 @@ model MetaPOA {
 // ---------------------------------------------------------------------------
 
 model DeviceToken {
-  id         String   @id @default(cuid())
-  token      String   @unique
-  plataforma String   @default("expo")
+  id          String     @id @default(cuid())
+  token       String     @unique
+  plataforma  String     @default("expo")
   // Si el dispositivo registró el token con sesión iniciada, queda ligado al
   // usuario — permite mandarle un push dirigido (p.ej. una alerta de
   // estancamiento a su responsable de zona) en vez de solo el broadcast a
   // todos los dispositivos. Nulo si se registró sin sesión (app pública).
-  userId     String?
-  user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String?
+  user        User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
   // La app pública no tiene cuenta de usuario, pero sí guarda localmente el id
   // del militante (carnet). Ligar el device token a ese id permite mandarle
   // push dirigido (ej. recordatorio de una actividad que confirmó) sin login.
   militanteId String?
   militante   Militante? @relation(fields: [militanteId], references: [id], onDelete: Cascade)
-  createdAt  DateTime @default(now())
+  createdAt   DateTime   @default(now())
 
   @@index([userId])
   @@index([militanteId])
 }
 
 model Notificacion {
-  id            String   @id @default(cuid())
-  titulo        String
-  cuerpo        String
-  tipo          String // OBRA | ACTIVIDAD | CONVOCATORIA | ALERTA_META | ALERTA_VOTACION
-  enviadaAt     DateTime @default(now())
-  destinatarios Int      @default(0)
+  id                 String   @id @default(cuid())
+  titulo             String
+  cuerpo             String
+  tipo               String // OBRA | ACTIVIDAD | CONVOCATORIA | ALERTA_META | ALERTA_VOTACION | RECORDATORIO_VOTO
+  enviadaAt          DateTime @default(now())
+  destinatarios      Int      @default(0)
   // Si se llena, la notificación es dirigida a un responsable de territorio
   // específico (además de SUPERADMIN, que siempre ve todo) en vez de ser un
   // broadcast visible para todos los que antes veían el historial completo.
   destinatarioUserId String?
-  destinatarioUser   User?   @relation("NotificacionDestinatario", fields: [destinatarioUserId], references: [id], onDelete: Cascade)
+  destinatarioUser   User?    @relation("NotificacionDestinatario", fields: [destinatarioUserId], references: [id], onDelete: Cascade)
 
   @@index([destinatarioUserId])
 }
