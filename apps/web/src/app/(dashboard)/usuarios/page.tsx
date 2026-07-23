@@ -162,7 +162,7 @@ export default function UsuariosPage() {
       const { nivelTerritorio: _nt, territorioProvinciaId: _tp, territorioMunicipioId: _tm, territorioDistritoId: _td, ...campos } = form;
       const territorio = territorioAEnviar(form);
       if (editando) {
-        const { email: _email, password, ...resto } = campos;
+        const { password, ...resto } = campos;
         await apiFetch(`/usuarios/${editando.id}`, {
           method: "PATCH",
           body: JSON.stringify({
@@ -304,11 +304,10 @@ export default function UsuariosPage() {
             <span className="mb-1 block text-sm font-medium text-gray-700">Correo</span>
             <input
               required
-              disabled={!!editando}
               type="email"
               value={form.email}
               onChange={(e) => setForm({ ...form, email: e.target.value })}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-400"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
             />
           </label>
           <label className="block">

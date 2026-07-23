@@ -158,6 +158,7 @@ const actualizarUsuarioSchema = z
   .object({
     nombre: z.string().min(2).optional(),
     telefono: z.string().optional(),
+    email: z.string().email().optional(),
     role: z.nativeEnum(Role).optional(),
     secretariaId: z.string().nullable().optional(),
     active: z.boolean().optional(),
