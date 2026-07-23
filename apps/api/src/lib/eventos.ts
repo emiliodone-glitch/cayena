@@ -19,3 +19,9 @@ busEventos.setMaxListeners(0); // muchas pestañas de mapa abiertas a la vez son
 export function emitirCambioMilitantes() {
   busEventos.emit("cambio-militantes");
 }
+
+// Mismo bus/canal SSE, evento distinto: Día Electoral refresca su propio
+// mapa de participación sin abrir una conexión nueva.
+export function emitirCambioVotos() {
+  busEventos.emit("cambio-votos");
+}

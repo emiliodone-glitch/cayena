@@ -208,6 +208,7 @@ model User {
   historialTitularidades    HistorialTitularSecretaria[] @relation("HistorialTitular")
   informesSubidos           InformeSecretaria[]          @relation("InformeAutor")
   checkInsRegistrados       AsistenciaActividad[]        @relation("CheckInRegistrador")
+  confirmacionesVotoComoFiscal ConfirmacionVoto[]        @relation("ConfirmacionVotoFiscal")
 }
 
 model RefreshToken {
@@ -447,6 +448,7 @@ model Militante {
 
   asistencias  AsistenciaActividad[]
   deviceTokens DeviceToken[]
+  confirmacionesVoto ConfirmacionVoto[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -459,6 +461,52 @@ model Militante {
   @@index([colegioId])
   @@index([cedula])
   @@index([telefono])
+}
+
+// ---------------------------------------------------------------------------
+// Día Electoral: participación de militantes propios (no resultados de
+// votación — el voto es secreto). Es una herramienta de arrastre/GOTV: cada
+// militante puede autoreportar que ya votó, o un fiscal/promotor puede
+// marcarlo por él escaneando su carnet en la mesa. El % se mide contra dos
+// bases: la propia (militantes registrados) y el padrón electoral general
+// (campo `electores` ya existente en Provincia/Municipio/DistritoMunicipal),
+// como indicador mínimo de participación confirmada.
+// ---------------------------------------------------------------------------
+
+model EventoElectoral {
+  id     String   @id @default(cuid())
+  nombre String
+  fecha  DateTime
+  // Solo un evento puede estar activo a la vez (se valida en la app, no en
+  // la BD) — es el que usan por defecto el mapa y el botón "Ya voté".
+  activo Boolean  @default(true)
+
+  confirmaciones ConfirmacionVoto[]
+
+  createdAt DateTime @default(now())
+
+  @@index([activo])
+}
+
+model ConfirmacionVoto {
+  id       String          @id @default(cuid())
+  eventoId String
+  evento   EventoElectoral @relation(fields: [eventoId], references: [id], onDelete: Cascade)
+
+  militanteId String
+  militante   Militante @relation(fields: [militanteId], references: [id], onDelete: Cascade)
+
+  metodo String // AUTOREPORTE | FISCAL_MESA
+
+  // Quién lo marcó, si fue un fiscal/promotor (nulo en autoreporte).
+  confirmadoPorId String?
+  confirmadoPor   User?   @relation("ConfirmacionVotoFiscal", fields: [confirmadoPorId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@unique([eventoId, militanteId])
+  @@index([eventoId])
+  @@index([militanteId])
 }
 
 // Meta de militantes vigente por demarcación (provincia, municipio o distrito municipal).
@@ -558,7 +606,7 @@ model Notificacion {
   id            String   @id @default(cuid())
   titulo        String
   cuerpo        String
-  tipo          String // OBRA | ACTIVIDAD | CONVOCATORIA | ALERTA_META
+  tipo          String // OBRA | ACTIVIDAD | CONVOCATORIA | ALERTA_META | ALERTA_VOTACION
   enviadaAt     DateTime @default(now())
   destinatarios Int      @default(0)
   // Si se llena, la notificación es dirigida a un responsable de territorio

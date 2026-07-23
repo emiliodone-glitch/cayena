@@ -16,6 +16,7 @@ import {
   Users,
   ClipboardList,
   Megaphone,
+  Vote,
   LogOut,
   X,
 } from "lucide-react";
@@ -28,6 +29,7 @@ const NAV = [
   { href: "/actividades", label: "Actividades", icon: CalendarDays, roles: null },
   { href: "/obras", label: "Obras", icon: Landmark, roles: null },
   { href: "/militantes", label: "Militantes", icon: MapPinned, roles: null },
+  { href: "/dia-electoral", label: "Día Electoral", icon: Vote, roles: ["SUPERADMIN", "JEFE_SECRETARIA", "PROMOTOR", "AUDITOR"] },
   { href: "/ranking", label: "Ranking", icon: Trophy, roles: ["SUPERADMIN", "JEFE_SECRETARIA", "AUDITOR"] },
   { href: "/gastos", label: "Gastos", icon: Wallet, roles: null },
   { href: "/poa", label: "POA / Metas", icon: PieChart, roles: null },

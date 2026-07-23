@@ -35,6 +35,11 @@ eventosRouter.get("/stream", (req, res) => {
   }
   busEventos.on("cambio-militantes", onCambio);
 
+  function onCambioVotos() {
+    res.write("event: cambio-votos\ndata: {}\n\n");
+  }
+  busEventos.on("cambio-votos", onCambioVotos);
+
   // Late routers/proxies (incluido el de Railway) suelen cerrar conexiones
   // inactivas — un comentario periódico (ignorado por EventSource) las
   // mantiene vivas sin disparar el listener onmessage del cliente.
@@ -43,5 +48,6 @@ eventosRouter.get("/stream", (req, res) => {
   req.on("close", () => {
     clearInterval(latido);
     busEventos.off("cambio-militantes", onCambio);
+    busEventos.off("cambio-votos", onCambioVotos);
   });
 });

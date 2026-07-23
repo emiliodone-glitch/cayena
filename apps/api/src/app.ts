@@ -19,6 +19,7 @@ import { localidadesRouter } from "./routes/localidades.routes";
 import { recintosRouter } from "./routes/recintos.routes";
 import { colegiosRouter } from "./routes/colegios.routes";
 import { eventosRouter } from "./routes/eventos.routes";
+import { diaElectoralRouter } from "./routes/diaElectoral.routes";
 import { UPLOADS_DIR } from "./lib/storage";
 import { errorHandler } from "./middleware/errorHandler";
 
@@ -56,6 +57,7 @@ export function createApp() {
   app.use("/recintos", recintosRouter);
   app.use("/colegios", colegiosRouter);
   app.use("/eventos", eventosRouter);
+  app.use("/dia-electoral", diaElectoralRouter);
 
   app.use(errorHandler);
 

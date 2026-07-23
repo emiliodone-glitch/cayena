@@ -1,10 +1,14 @@
 import { useEffect, useState } from "react";
-import { FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import QRCode from "react-native-qrcode-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "@/api/auth";
 import { apiFetch, ApiError } from "@/api/client";
 import { MI_MILITANTE_ID_KEY, MI_MILITANTE_NOMBRE_KEY } from "@/lib/carnet";
+import { useOffline } from "@/lib/offlineContext";
+import { encolarVoto } from "@/lib/offlineQueueVotos";
+
+type EventoElectoral = { id: string; nombre: string; fecha: string };
 
 type Dirigente = {
   id: string;
@@ -16,11 +20,16 @@ type Dirigente = {
 
 export default function PerfilScreen() {
   const { user, login, logout, loading } = useAuth();
+  const { conectado } = useOffline();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [dirigentes, setDirigentes] = useState<Dirigente[]>([]);
   const [carnet, setCarnet] = useState<{ id: string; nombre: string } | null>(null);
+  const [eventoElectoral, setEventoElectoral] = useState<EventoElectoral | null>(null);
+  const [yaVote, setYaVote] = useState(false);
+  const [enviandoVoto, setEnviandoVoto] = useState(false);
+  const [votoEncolado, setVotoEncolado] = useState(false);
 
   useEffect(() => {
     apiFetch<Dirigente[]>("/usuarios/directorio", {}, false).then(setDirigentes);
@@ -29,7 +38,38 @@ export default function PerfilScreen() {
         if (id && nombre) setCarnet({ id, nombre });
       },
     );
+    apiFetch<EventoElectoral | null>("/dia-electoral/activo", {}, false)
+      .then(setEventoElectoral)
+      .catch(() => setEventoElectoral(null));
   }, []);
+
+  useEffect(() => {
+    if (!eventoElectoral || !carnet) return;
+    apiFetch<{ confirmado: boolean }>(`/dia-electoral/mi-estado/${carnet.id}`, {}, false)
+      .then((r) => setYaVote(r.confirmado))
+      .catch(() => {});
+  }, [eventoElectoral, carnet]);
+
+  async function confirmarVoto() {
+    if (!carnet || enviandoVoto) return;
+    setEnviandoVoto(true);
+    try {
+      if (!conectado) {
+        await encolarVoto(carnet.id);
+        setVotoEncolado(true);
+      } else {
+        await apiFetch("/dia-electoral/confirmar", { method: "POST", body: JSON.stringify({ militanteId: carnet.id }) }, false);
+      }
+      setYaVote(true);
+    } catch {
+      // Sin conexión real aunque NetInfo dijera que sí había — se encola igual, por seguridad.
+      await encolarVoto(carnet.id);
+      setVotoEncolado(true);
+      setYaVote(true);
+    } finally {
+      setEnviandoVoto(false);
+    }
+  }
 
   async function handleLogin() {
     setError(null);
@@ -96,6 +136,24 @@ export default function PerfilScreen() {
             </View>
           )}
 
+          {carnet && eventoElectoral && (
+            <View style={styles.votoCard}>
+              <Text style={styles.tituloLogin}>{eventoElectoral.nombre}</Text>
+              {yaVote ? (
+                <View style={styles.votoConfirmado}>
+                  <Text style={styles.votoConfirmadoTexto}>✓ Voto confirmado{votoEncolado ? " (se sincronizará al recuperar señal)" : ""}</Text>
+                </View>
+              ) : (
+                <TouchableOpacity style={styles.botonVoto} onPress={confirmarVoto} disabled={enviandoVoto}>
+                  {enviandoVoto ? <ActivityIndicator color="white" /> : <Text style={styles.botonTexto}>Ya voté</Text>}
+                </TouchableOpacity>
+              )}
+              {!conectado && !yaVote && (
+                <Text style={styles.avisoOffline}>Sin conexión: se guardará en tu teléfono y se enviará solo al recuperar señal.</Text>
+              )}
+            </View>
+          )}
+
           <Text style={styles.seccion}>Directorio de dirigentes</Text>
         </View>
       }
@@ -135,6 +193,17 @@ const styles = StyleSheet.create({
     padding: 20,
     alignItems: "center",
   },
+  votoCard: {
+    marginTop: 16,
+    backgroundColor: "#eef2ff",
+    borderRadius: 14,
+    padding: 20,
+    alignItems: "center",
+  },
+  botonVoto: { width: "100%", backgroundColor: "#4338ca", borderRadius: 10, paddingVertical: 12, alignItems: "center" },
+  votoConfirmado: { width: "100%", backgroundColor: "#e0e7ff", borderRadius: 10, paddingVertical: 12, alignItems: "center" },
+  votoConfirmadoTexto: { color: "#312e81", fontWeight: "700", textAlign: "center" },
+  avisoOffline: { marginTop: 8, fontSize: 11, color: "#6b7280", textAlign: "center" },
   qrBox: { padding: 12, backgroundColor: "white", borderRadius: 12, marginBottom: 10 },
   nombre: { fontSize: 17, fontWeight: "700", color: "#123f1c" },
   rol: { fontSize: 12, color: "#6b7280", marginTop: 2 },
