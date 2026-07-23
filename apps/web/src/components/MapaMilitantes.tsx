@@ -94,12 +94,12 @@ function colorPenetracion(p: number | null | undefined): string {
 // píxeles que ocupará un texto con la misma tipografía de .etiqueta-mapa —
 // necesario para detectar colisiones entre etiquetas del mapa.
 let contextoMedicion: CanvasRenderingContext2D | null | undefined;
-function medirTexto(texto: string): number {
+function medirTexto(texto: string, fontPx = 11): number {
   if (contextoMedicion === undefined) {
     contextoMedicion = typeof document !== "undefined" ? document.createElement("canvas").getContext("2d") : null;
-    if (contextoMedicion) contextoMedicion.font = "600 11px system-ui, sans-serif";
   }
-  return contextoMedicion?.measureText(texto).width ?? texto.length * 7;
+  if (contextoMedicion) contextoMedicion.font = `600 ${fontPx}px system-ui, sans-serif`;
+  return contextoMedicion?.measureText(texto).width ?? texto.length * fontPx * 0.6;
 }
 
 // Aplana Polygon/MultiPolygon a su lista de anillos (coordenadas [lng, lat]).
@@ -154,6 +154,29 @@ function dentroDelAnillo(x: number, y: number, anillo: number[][]): boolean {
     if (cruza) dentro = !dentro;
   }
   return dentro;
+}
+
+// Ancho horizontal real del anillo en la latitud `y`, en la franja que
+// contiene a `x` — a diferencia de distanciaAlBorde (que da la distancia al
+// borde más cercano en CUALQUIER dirección), esto mide específicamente
+// cuánto espacio horizontal hay para un texto que se extiende a los lados
+// del ancla, que es lo que puede desbordar en provincias angostas de
+// nombre largo (María Trinidad Sánchez, San Pedro de Macorís, etc.) aunque
+// el ancla esté bien centrada verticalmente.
+function anchoHorizontalEnPunto(anillo: number[][], x: number, y: number): number {
+  const cruces: number[] = [];
+  for (let i = 0, j = anillo.length - 2; i < anillo.length - 1; j = i++) {
+    const [xi, yi] = anillo[i];
+    const [xj, yj] = anillo[j];
+    if (yi > y !== yj > y) {
+      cruces.push(((xj - xi) * (y - yi)) / (yj - yi) + xi);
+    }
+  }
+  cruces.sort((a, b) => a - b);
+  for (let i = 0; i < cruces.length - 1; i++) {
+    if (x >= cruces[i] && x <= cruces[i + 1]) return cruces[i + 1] - cruces[i];
+  }
+  return Infinity;
 }
 
 function distanciaPuntoASegmento(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
@@ -720,6 +743,7 @@ export function MapaMilitantes({
         cy: number;
         ancho: number;
         alto: number;
+        fontPx: number;
       };
       const candidatos: Candidato[] = [];
       const descartados: L.Path[] = [];
@@ -739,7 +763,32 @@ export function MapaMilitantes({
         const tooltip = path.getTooltip();
         const texto = tooltip?.getContent();
         const nombreFeature = (path.feature?.properties as Propiedades | undefined)?.nombre ?? "";
-        const anchoTexto = medirTexto(typeof texto === "string" ? texto : nombreFeature);
+        const nombreEtiqueta = typeof texto === "string" ? texto : nombreFeature;
+        let anchoTexto = medirTexto(nombreEtiqueta);
+        // El nombre puede ser más ancho que el territorio disponible
+        // horizontalmente justo en la latitud del ancla, aunque el ancla en
+        // sí esté bien centrada (provincias angostas con nombre largo:
+        // María Trinidad Sánchez, San Pedro de Macorís, Hermanas Mirabal…):
+        // se reduce el tamaño de letra de ESA etiqueta hasta que el texto
+        // quepa en el ancho real disponible ahí, en vez de dejarlo
+        // desbordar sobre el vecino o el mar.
+        let fontPx = 11;
+        const anclaPrevia = L.latLng(path.anclaEtiqueta ?? b.getCenter());
+        const anilloParaAncho = path.feature ? mayorAnillo(path.feature) : null;
+        if (anilloParaAncho) {
+          const disponibleGrados = anchoHorizontalEnPunto(anilloParaAncho, anclaPrevia.lng, anclaPrevia.lat);
+          if (Number.isFinite(disponibleGrados)) {
+            const bordeIzq = map.latLngToContainerPoint([anclaPrevia.lat, anclaPrevia.lng - disponibleGrados / 2]);
+            const bordeDer = map.latLngToContainerPoint([anclaPrevia.lat, anclaPrevia.lng + disponibleGrados / 2]);
+            const disponiblePx = Math.abs(bordeDer.x - bordeIzq.x);
+            const necesarioPx = anchoTexto + 8;
+            if (necesarioPx > disponiblePx * 0.94) {
+              const factor = Math.max(0.6, (disponiblePx * 0.94) / necesarioPx);
+              fontPx = Math.max(8, Math.round(11 * factor));
+              anchoTexto = medirTexto(nombreEtiqueta, fontPx);
+            }
+          }
+        }
         // El umbral de descarte usa el MENOR entre un mínimo parejo (52px) y
         // el ancho real que pide el texto: para nombres largos el mínimo
         // parejo sigue mandando (mismo comportamiento de siempre), pero una
@@ -766,6 +815,7 @@ export function MapaMilitantes({
           cy: anclaPx.y,
           ancho: anchoTexto + 8,
           alto: 16,
+          fontPx,
         });
       });
 
@@ -805,6 +855,14 @@ export function MapaMilitantes({
           // argumento recalcula la posición desde el centro ingenuo de
           // Leaflet, pisando la corrección de centroideMayorAnillo.
           c.path.openTooltip(ancla);
+          // El tamaño de letra reducido (nombres largos en territorios
+          // angostos) solo existe en JS hasta este punto: la clase CSS
+          // .etiqueta-mapa fija 11px para todas, así que hay que pisarla
+          // con un estilo inline por etiqueta después de abrirla.
+          const elementoTooltip = c.path.getTooltip()?.getElement();
+          if (elementoTooltip) {
+            elementoTooltip.style.fontSize = c.fontPx !== 11 ? `${c.fontPx}px` : "";
+          }
           colocado = true;
           break;
         }
