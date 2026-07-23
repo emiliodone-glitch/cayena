@@ -352,7 +352,21 @@ async function main() {
   await seedTitulares();
   await limpiarDescripcionTitularLegado();
   await seedInsignias();
-  await seedMetasYDemo();
+  // seedMetasYDemo() NO es seguro correr dos veces (crea MetaMilitantes con
+  // .create(), sin control de duplicados) y además mete militantes, una obra
+  // y una actividad de EJEMPLO — perfecto para un ambiente de prueba nuevo,
+  // pero jamás debe tocar una base con datos reales ya cargados (duplicaría
+  // metas y mezclaría gente falsa con el padrón real). Por eso queda apagado
+  // por defecto; solo se activa a propósito con SEED_DEMO_DATA=true, pensado
+  // para levantar un ambiente de prueba desde cero.
+  if (process.env.SEED_DEMO_DATA === "true") {
+    await seedMetasYDemo();
+  } else {
+    console.log(
+      "SEED_DEMO_DATA no está en 'true': se omiten las metas de referencia y los datos de ejemplo " +
+        "(militantes/obra/actividad demo). Nada de esto se toca en una base con datos reales.",
+    );
+  }
 }
 
 main()
