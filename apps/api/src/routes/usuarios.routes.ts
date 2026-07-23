@@ -89,21 +89,47 @@ usuariosRouter.get(
   "/",
   asyncRoute(async (_req, res) => {
     const usuarios = await prisma.user.findMany({
-      include: { secretaria: { select: { nombre: true } } },
+      include: {
+        secretaria: { select: { nombre: true } },
+        provincia: { select: { nombre: true } },
+        // Se incluye el padre geográfico (provinciaId) para que el back
+        // office pueda preseleccionar en cascada las listas de
+        // provincia→municipio→distrito al editar el territorio asignado.
+        municipio: { select: { nombre: true, provinciaId: true } },
+        distritoMunicipal: {
+          select: { nombre: true, municipioId: true, municipio: { select: { provinciaId: true } } },
+        },
+      },
       orderBy: { createdAt: "desc" },
     });
     res.json(usuarios.map(({ passwordHash: _ph, ...rest }) => rest));
   }),
 );
 
-const crearUsuarioSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8),
-  nombre: z.string().min(2),
-  telefono: z.string().optional(),
-  role: z.nativeEnum(Role),
-  secretariaId: z.string().optional(),
-});
+// Territorio asignado (coordinador de zona): a lo sumo uno de los tres — se
+// manda explícitamente en null los otros dos al cambiar de nivel, así que
+// alcanza con contar cuántos vienen con un valor real en este request.
+function unSoloTerritorio(v: {
+  provinciaId?: string | null;
+  municipioId?: string | null;
+  distritoMunicipalId?: string | null;
+}) {
+  return [v.provinciaId, v.municipioId, v.distritoMunicipalId].filter((x) => !!x).length <= 1;
+}
+
+const crearUsuarioSchema = z
+  .object({
+    email: z.string().email(),
+    password: z.string().min(8),
+    nombre: z.string().min(2),
+    telefono: z.string().optional(),
+    role: z.nativeEnum(Role),
+    secretariaId: z.string().optional(),
+    provinciaId: z.string().nullable().optional(),
+    municipioId: z.string().nullable().optional(),
+    distritoMunicipalId: z.string().nullable().optional(),
+  })
+  .refine(unSoloTerritorio, { message: "Solo se puede asignar un nivel de territorio: provincia, municipio o distrito" });
 
 usuariosRouter.post(
   "/",
@@ -118,6 +144,9 @@ usuariosRouter.post(
         telefono: data.telefono,
         role: data.role,
         secretariaId: data.secretariaId,
+        provinciaId: data.provinciaId,
+        municipioId: data.municipioId,
+        distritoMunicipalId: data.distritoMunicipalId,
       },
     });
     const { passwordHash: _ph, ...rest } = usuario;
@@ -125,14 +154,19 @@ usuariosRouter.post(
   }),
 );
 
-const actualizarUsuarioSchema = z.object({
-  nombre: z.string().min(2).optional(),
-  telefono: z.string().optional(),
-  role: z.nativeEnum(Role).optional(),
-  secretariaId: z.string().nullable().optional(),
-  active: z.boolean().optional(),
-  password: z.string().min(8).optional(),
-});
+const actualizarUsuarioSchema = z
+  .object({
+    nombre: z.string().min(2).optional(),
+    telefono: z.string().optional(),
+    role: z.nativeEnum(Role).optional(),
+    secretariaId: z.string().nullable().optional(),
+    active: z.boolean().optional(),
+    password: z.string().min(8).optional(),
+    provinciaId: z.string().nullable().optional(),
+    municipioId: z.string().nullable().optional(),
+    distritoMunicipalId: z.string().nullable().optional(),
+  })
+  .refine(unSoloTerritorio, { message: "Solo se puede asignar un nivel de territorio: provincia, municipio o distrito" });
 
 usuariosRouter.patch(
   "/:id",

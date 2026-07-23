@@ -54,6 +54,7 @@ model Provincia {
   militantes Militante[]
   obras      Obra[]
   metas      MetaMilitantes[]
+  responsables User[] @relation("ResponsableProvincia")
 
   createdAt DateTime @default(now())
 }
@@ -70,6 +71,7 @@ model Municipio {
   metas                MetaMilitantes[]
   distritosMunicipales DistritoMunicipal[]
   localidades          Localidad[]
+  responsables         User[] @relation("ResponsableMunicipio")
 
   createdAt DateTime @default(now())
 
@@ -89,6 +91,7 @@ model DistritoMunicipal {
 
   militantes Militante[]
   metas      MetaMilitantes[]
+  responsables User[] @relation("ResponsableDistrito")
 
   createdAt DateTime @default(now())
 
@@ -163,6 +166,19 @@ model User {
   secretariaId String?
   secretaria   Secretaria? @relation(fields: [secretariaId], references: [id])
 
+  // Territorio asignado (coordinador de zona): a lo sumo uno de los tres
+  // debiera estar presente a la vez (se valida en la app, no en la BD) — el
+  // más específico define el alcance del usuario. Sin ninguno, el usuario
+  // conserva la visibilidad nacional de siempre (compatibilidad con las
+  // cuentas ya existentes). SUPERADMIN y AUDITOR siempre ven todo el país
+  // sin importar si tienen algo asignado acá.
+  provinciaId String?
+  provincia   Provincia? @relation("ResponsableProvincia", fields: [provinciaId], references: [id])
+  municipioId String?
+  municipio   Municipio? @relation("ResponsableMunicipio", fields: [municipioId], references: [id])
+  distritoMunicipalId String?
+  distritoMunicipal   DistritoMunicipal? @relation("ResponsableDistrito", fields: [distritoMunicipalId], references: [id])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -172,6 +188,8 @@ model User {
   gastosRegistrados  Gasto[]        @relation("GastoRegistrador")
   avancesRegistrados AvancePOA[]    @relation("AvanceRegistrador")
   refreshTokens      RefreshToken[]
+  notificacionesRecibidas Notificacion[] @relation("NotificacionDestinatario")
+  deviceTokens       DeviceToken[]
 }
 
 model RefreshToken {
@@ -398,7 +416,15 @@ model DeviceToken {
   id         String   @id @default(cuid())
   token      String   @unique
   plataforma String   @default("expo")
+  // Si el dispositivo registró el token con sesión iniciada, queda ligado al
+  // usuario — permite mandarle un push dirigido (p.ej. una alerta de
+  // estancamiento a su responsable de zona) en vez de solo el broadcast a
+  // todos los dispositivos. Nulo si se registró sin sesión (app pública).
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt  DateTime @default(now())
+
+  @@index([userId])
 }
 
 model Notificacion {
@@ -408,6 +434,13 @@ model Notificacion {
   tipo          String // OBRA | ACTIVIDAD | CONVOCATORIA | ALERTA_META
   enviadaAt     DateTime @default(now())
   destinatarios Int      @default(0)
+  // Si se llena, la notificación es dirigida a un responsable de territorio
+  // específico (además de SUPERADMIN, que siempre ve todo) en vez de ser un
+  // broadcast visible para todos los que antes veían el historial completo.
+  destinatarioUserId String?
+  destinatarioUser   User?   @relation("NotificacionDestinatario", fields: [destinatarioUserId], references: [id], onDelete: Cascade)
+
+  @@index([destinatarioUserId])
 }
 
 // ---------------------------------------------------------------------------

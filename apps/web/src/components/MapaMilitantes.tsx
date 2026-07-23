@@ -7,6 +7,7 @@ import * as L from "leaflet";
 import type { Feature, FeatureCollection, Polygon, MultiPolygon } from "geojson";
 import { COLOR_ESTADO, type EstadoAvance } from "@cayena/shared";
 import { apiFetch, API_URL, getAccessToken } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 
 type Propiedades = {
   id: string;
@@ -279,6 +280,7 @@ export function MapaMilitantes({
    * color, puntos, exportar) y el ranking del nivel actual. */
   herramientas?: boolean;
 }) {
+  const { user } = useAuth();
   const [nivel, setNivel] = useState<"nacional" | "municipios" | "distritos">("nacional");
   const [provinciaSeleccionada, setProvinciaSeleccionada] = useState<{ id: string; nombre: string } | null>(
     null,
@@ -288,6 +290,24 @@ export function MapaMilitantes({
   );
   const [geo, setGeo] = useState<FeatureCollection | null>(null);
   const [panel, setPanel] = useState<PanelInfo>(null);
+  // Un coordinador de zona (usuario con territorio asignado) entra
+  // directo a su propia demarcación en vez de al mapa nacional completo —
+  // el backend igual filtraría ese nivel a solo su territorio, así que
+  // partir ahí de una vez ahorra un clic redundante. Se hace una sola vez
+  // (autoNavegoRef), cuando el usuario ya cargó desde /auth/me.
+  const autoNavegoRef = useRef(false);
+  useEffect(() => {
+    if (autoNavegoRef.current || !user) return;
+    autoNavegoRef.current = true;
+    if (!user.alcanceProvinciaId) return;
+    setProvinciaSeleccionada({ id: user.alcanceProvinciaId, nombre: user.alcanceProvinciaNombre! });
+    if (user.alcanceDistritoId && user.alcanceMunicipioId) {
+      setMunicipioSeleccionado({ id: user.alcanceMunicipioId, nombre: user.alcanceMunicipioNombre! });
+      setNivel("distritos");
+    } else {
+      setNivel("municipios");
+    }
+  }, [user]);
   const [loading, setLoading] = useState(true);
   const [filtros, setFiltros] = useState<FiltrosMapa>({});
   const [modoColor, setModoColor] = useState<"meta" | "electorado">("meta");
@@ -330,6 +350,14 @@ export function MapaMilitantes({
   }, [modoColor]);
 
   useEffect(() => {
+    // Si este efecto se re-dispara (cambia de nivel/demarcación) antes de que
+    // el fetch anterior resuelva — p.ej. el auto-ingreso al territorio de un
+    // coordinador de zona cambia `nivel` en cuanto carga /auth/me, disparando
+    // este efecto dos veces casi seguidas — el fetch viejo podía resolver
+    // DESPUÉS del nuevo y pisar el geo correcto con uno de un nivel anterior.
+    // `cancelado` descarta cualquier respuesta que llegue tras haber pasado a
+    // un efecto más nuevo (limpieza estándar de React para efectos con fetch).
+    let cancelado = false;
     setLoading(true);
     // Importante: el layer de <GeoJSON> de react-leaflet es inmutable una vez
     // creado — cambiar solo el prop `data` no redibuja la geometría, hace
@@ -350,6 +378,7 @@ export function MapaMilitantes({
           : `/geo/municipios/${municipioSeleccionado?.id}/distritos-municipales${qs}`;
     apiFetch<FeatureCollection>(path)
       .then((data) => {
+        if (cancelado) return;
         setGeo(data);
         // No reseteamos el panel a null aquí: si ya había una demarcación
         // seleccionada (por clic, no solo hover) se mantiene visible al
@@ -365,7 +394,12 @@ export function MapaMilitantes({
           return encontrada ? (encontrada.properties as Propiedades) : prev;
         });
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!cancelado) setLoading(false);
+      });
+    return () => {
+      cancelado = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nivel, provinciaSeleccionada?.id, municipioSeleccionado?.id, refreshToken, refreshVivo, filtros]);
 
@@ -743,6 +777,17 @@ export function MapaMilitantes({
   }
 
   function volverANacional() {
+    // Un coordinador con territorio asignado no tiene una vista "nacional"
+    // útil — el backend la filtraría de todos modos a su única provincia —
+    // así que "Nacional" para él vuelve al tope de su propio territorio.
+    if (user?.alcanceProvinciaId) {
+      setNivel("municipios");
+      setProvinciaSeleccionada({ id: user.alcanceProvinciaId, nombre: user.alcanceProvinciaNombre! });
+      setMunicipioSeleccionado(null);
+      setPanel(null);
+      onDemarcacionChange?.(null);
+      return;
+    }
     setNivel("nacional");
     setProvinciaSeleccionada(null);
     setMunicipioSeleccionado(null);
@@ -1164,12 +1209,19 @@ export function MapaMilitantes({
         <nav aria-label="Ruta del mapa" className="flex items-center gap-1 text-sm text-gray-500">
           <button
             onClick={volverANacional}
-            disabled={nivel === "nacional"}
-            className={nivel === "nacional" ? "font-semibold text-institucional-900" : "hover:text-institucional-700 hover:underline"}
+            disabled={user?.alcanceProvinciaId ? nivel === "municipios" && !municipioSeleccionado : nivel === "nacional"}
+            className={
+              (user?.alcanceProvinciaId ? nivel === "municipios" && !municipioSeleccionado : nivel === "nacional")
+                ? "font-semibold text-institucional-900"
+                : "hover:text-institucional-700 hover:underline"
+            }
           >
-            Nacional
+            {/* Un coordinador de zona no tiene una vista nacional real (ver
+            volverANacional): la raíz de su ruta es directamente su propia
+            provincia asignada. */}
+            {user?.alcanceProvinciaId ? user.alcanceProvinciaNombre : "Nacional"}
           </button>
-          {provinciaSeleccionada && (
+          {provinciaSeleccionada && !user?.alcanceProvinciaId && (
             <>
               <span className="text-gray-300">›</span>
               <button

@@ -3,7 +3,7 @@ import multer from "multer";
 import { parse } from "csv-parse/sync";
 import { z } from "zod";
 import { prisma } from "@cayena/database";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth, requireRole, resolverAlcance, whereMilitanteAlcance, puedeGestionarMilitante } from "../middleware/auth";
 import { asyncRoute, HttpError } from "../middleware/errorHandler";
 import { otorgarInsigniaBienvenida } from "../lib/gamificacion";
 import { calcularRango, type Periodo } from "../lib/periodo";
@@ -137,6 +137,7 @@ militantesRouter.get(
   asyncRoute(async (req, res) => {
     const { provinciaId, municipioId, distritoMunicipalId, sinDistritoMunicipal, desde, hasta, periodo, origen, capturadoPorId, q } =
       querySchema.parse(req.query);
+    const alcanceUsuario = await resolverAlcance(req.user!);
     const fechaFilter: Record<string, Date> = {};
     if (periodo) {
       const rango = calcularRango(periodo as Periodo, desde, hasta);
@@ -165,6 +166,10 @@ militantesRouter.get(
               ],
             }
           : {}),
+        // Un coordinador con territorio asignado solo ve el padrón de su
+        // propia zona, sin importar qué filtros haya pasado — igual que en
+        // los endpoints del mapa (ver whereMilitanteAlcance).
+        ...whereMilitanteAlcance(alcanceUsuario),
       },
       include: {
         provincia: { select: { nombre: true } },
@@ -203,6 +208,16 @@ militantesRouter.post(
   requireRole("SUPERADMIN", "JEFE_SECRETARIA", "PROMOTOR"),
   asyncRoute(async (req, res) => {
     const data = militanteSchema.parse(req.body);
+    const alcanceUsuario = await resolverAlcance(req.user!);
+    if (
+      !puedeGestionarMilitante(alcanceUsuario, {
+        provinciaId: data.provinciaId,
+        municipioId: data.municipioId,
+        distritoMunicipalId: data.distritoMunicipalId ?? null,
+      })
+    ) {
+      throw new HttpError(403, "No puedes registrar militantes fuera de tu territorio asignado");
+    }
 
     const existente = await prisma.militante.findUnique({ where: { cedula: data.cedula } });
     if (existente) throw new HttpError(409, "Ya existe un registro con esta cédula");
@@ -235,6 +250,18 @@ militantesRouter.post(
   uploadCsv.single("file"),
   asyncRoute(async (req, res) => {
     if (!req.file) throw new HttpError(400, "No se recibió ningún archivo CSV");
+    const alcanceUsuario = await resolverAlcance(req.user!);
+    // El CSV no soporta distrito municipal (solo provincia/municipio) — un
+    // coordinador con territorio a nivel distrito no puede producir filas
+    // que cumplan su alcance exacto, así que se le pide registrar uno por
+    // uno en vez de dejar que la importación cree militantes fuera de su
+    // distrito sin que se note.
+    if (alcanceUsuario?.nivel === "distrito") {
+      throw new HttpError(
+        400,
+        "Tu territorio asignado es un distrito municipal específico y la importación por CSV no distingue ese nivel — registra los militantes uno por uno desde el formulario.",
+      );
+    }
 
     let filas: Record<string, string>[];
     try {
@@ -280,6 +307,15 @@ militantesRouter.post(
       const municipio = municipioPorNombreYProvincia.get(`${provincia.id}::${normalizarNombre(municipioNombre)}`);
       if (!municipio) {
         resultados.push({ fila: numeroFila, nombre, estado: "error", mensaje: `Municipio "${municipioNombre}" no encontrado en ${provincia.nombre}` });
+        continue;
+      }
+      if (!puedeGestionarMilitante(alcanceUsuario, { provinciaId: provincia.id, municipioId: municipio.id })) {
+        resultados.push({
+          fila: numeroFila,
+          nombre,
+          estado: "error",
+          mensaje: `"${municipioNombre}, ${provincia.nombre}" está fuera de tu territorio asignado`,
+        });
         continue;
       }
 

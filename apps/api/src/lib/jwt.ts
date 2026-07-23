@@ -8,6 +8,12 @@ export type AccessTokenPayload = {
   sub: string;
   role: Role;
   secretariaId: string | null;
+  // Territorio asignado (coordinador de zona) — ver comentario en el modelo
+  // User del schema. Viaja en el token para que el middleware de alcance no
+  // necesite una consulta extra a la BD en cada request.
+  provinciaId: string | null;
+  municipioId: string | null;
+  distritoMunicipalId: string | null;
 };
 
 export function signAccessToken(payload: AccessTokenPayload): string {

@@ -2,7 +2,15 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma, Prisma, loadProvinciasGeo, loadMunicipiosGeo, loadDistritosMunicipalesGeo } from "@cayena/database";
 import { calcularEstadoAvance, calcularPorcentaje } from "@cayena/shared";
-import { asyncRoute } from "../middleware/errorHandler";
+import { asyncRoute, HttpError } from "../middleware/errorHandler";
+import {
+  requireAuth,
+  resolverAlcance,
+  puedeVerProvincia,
+  puedeVerMunicipio,
+  puedeVerDistrito,
+  whereMilitanteAlcance,
+} from "../middleware/auth";
 import { calcularRango, type Periodo } from "../lib/periodo";
 
 export const geoRouter = Router();
@@ -82,6 +90,12 @@ geoRouter.get(
     ]);
   }),
 );
+
+// El registro público de militantes (RF-26, sin sesión) necesita las listas
+// de arriba para sus selects — el resto de endpoints de este router sí
+// requieren sesión, porque de acá en adelante se filtra por el territorio
+// asignado al usuario (ver middleware/auth.ts).
+geoRouter.use(requireAuth);
 
 // ---------------------------------------------------------------------------
 // Filtros comunes de los endpoints del mapa (RF-13 ampliado): período de
@@ -232,6 +246,7 @@ geoRouter.get(
   "/provincias",
   asyncRoute(async (req, res) => {
     const filtros = filtrosSchema.parse(req.query);
+    const alcanceUsuario = await resolverAlcance(req.user!);
     const geo = loadProvinciasGeo();
     const [stats, metas, provincias] = await Promise.all([
       statsPorCampo("provinciaId", filtros),
@@ -240,16 +255,21 @@ geoRouter.get(
     ]);
     const electoresMap = new Map(provincias.map((p) => [p.id, p.electores]));
 
-    const features = geo.features.map((f) => {
-      const id = String(f.properties?.id);
-      return {
-        ...f,
-        properties: {
-          ...f.properties,
-          ...propsDemarcacion(id, metas.get(id) ?? 0, electoresMap.get(id), stats),
-        },
-      };
-    });
+    // Un coordinador con territorio asignado solo ve su propia provincia en
+    // el mapa nacional (o ninguna, si su territorio queda por debajo de ese
+    // nivel — igual puede entrar directo a su municipio/distrito).
+    const features = geo.features
+      .filter((f) => puedeVerProvincia(alcanceUsuario, String(f.properties?.id)))
+      .map((f) => {
+        const id = String(f.properties?.id);
+        return {
+          ...f,
+          properties: {
+            ...f.properties,
+            ...propsDemarcacion(id, metas.get(id) ?? 0, electoresMap.get(id), stats),
+          },
+        };
+      });
 
     res.json({ type: "FeatureCollection", features });
   }),
@@ -261,8 +281,17 @@ geoRouter.get(
   asyncRoute(async (req, res) => {
     const { provinciaId } = req.params;
     const filtros = filtrosSchema.parse(req.query);
+    const alcanceUsuario = await resolverAlcance(req.user!);
+    if (!puedeVerProvincia(alcanceUsuario, provinciaId)) {
+      throw new HttpError(403, "No tienes acceso a esta provincia");
+    }
     const geo = loadMunicipiosGeo();
-    const featuresProv = geo.features.filter((f) => f.properties?.provinciaId === provinciaId);
+    let featuresProv = geo.features.filter((f) => f.properties?.provinciaId === provinciaId);
+    // Coordinador con territorio a nivel municipio/distrito: dentro de su
+    // propia provincia solo ve su propio municipio, no los vecinos.
+    if (alcanceUsuario && alcanceUsuario.nivel !== "provincia") {
+      featuresProv = featuresProv.filter((f) => f.properties?.id === alcanceUsuario.municipioId);
+    }
 
     const [stats, metas, municipios] = await Promise.all([
       statsPorCampo("municipioId", filtros, { provinciaId }),
@@ -320,6 +349,14 @@ geoRouter.get(
   asyncRoute(async (req, res) => {
     const { municipioId } = req.params;
     const filtros = filtrosSchema.parse(req.query);
+    const alcanceUsuario = await resolverAlcance(req.user!);
+    const municipioBase = await prisma.municipio.findUniqueOrThrow({
+      where: { id: municipioId },
+      select: { provinciaId: true, electores: true },
+    });
+    if (!puedeVerMunicipio(alcanceUsuario, municipioId, municipioBase.provinciaId)) {
+      throw new HttpError(403, "No tienes acceso a este municipio");
+    }
     const geo = loadDistritosMunicipalesGeo();
     const featuresMuni = geo.features.filter((f) => f.properties?.municipioId === municipioId);
 
@@ -331,7 +368,7 @@ geoRouter.get(
       if (!porNombreSinArticulo.has(key)) porNombreSinArticulo.set(key, d);
     }
 
-    const resueltos = await Promise.all(
+    let resueltos = await Promise.all(
       featuresMuni.map(async (f) => {
         if (f.properties?.esCabecera) return { feature: f, distrito: null };
         const nombre = String(f.properties?.nombre ?? "");
@@ -344,11 +381,17 @@ geoRouter.get(
         return { feature: f, distrito };
       }),
     );
+    // Coordinador con territorio a nivel distrito: dentro de su propio
+    // municipio solo ve su propio distrito (nunca la cabecera, que no tiene
+    // fila propia en DistritoMunicipal — el filtro solo pasa la coincidencia
+    // exacta por id real).
+    if (alcanceUsuario?.nivel === "distrito") {
+      resueltos = resueltos.filter((r) => r.distrito?.id === alcanceUsuario.distritoMunicipalId);
+    }
 
-    const [stats, metas, municipio] = await Promise.all([
+    const [stats, metas] = await Promise.all([
       statsPorCampo("distritoMunicipalId", filtros, { municipioId }),
       metasActivasPorDistritoMunicipal(),
-      prisma.municipio.findUnique({ where: { id: municipioId }, select: { electores: true } }),
     ]);
 
     const features = resueltos.map(({ feature, distrito }) => {
@@ -367,7 +410,7 @@ geoRouter.get(
             ...feature.properties,
             id: null,
             ...propsDemarcacion(null, 0, null, stats),
-            electores: municipio?.electores ?? null,
+            electores: municipioBase.electores ?? null,
             penetracion: null,
           },
         };
@@ -392,7 +435,7 @@ geoRouter.get(
 geoRouter.get(
   "/militantes-puntos",
   asyncRoute(async (req, res) => {
-    const alcance = z
+    const filtroAlcance = z
       .object({
         provinciaId: z.string().optional(),
         municipioId: z.string().optional(),
@@ -402,17 +445,22 @@ geoRouter.get(
       .parse(req.query);
     const filtros = filtrosSchema.parse(req.query);
     const rango = rangoDeFiltros(filtros);
+    const alcanceUsuario = await resolverAlcance(req.user!);
 
     const puntos = await prisma.militante.findMany({
       where: {
         lat: { not: null },
         lng: { not: null },
-        ...(alcance.provinciaId ? { provinciaId: alcance.provinciaId } : {}),
-        ...(alcance.municipioId ? { municipioId: alcance.municipioId } : {}),
-        ...(alcance.distritoMunicipalId ? { distritoMunicipalId: alcance.distritoMunicipalId } : {}),
-        ...(alcance.sinDistritoMunicipal === "true" ? { distritoMunicipalId: null } : {}),
+        ...(filtroAlcance.provinciaId ? { provinciaId: filtroAlcance.provinciaId } : {}),
+        ...(filtroAlcance.municipioId ? { municipioId: filtroAlcance.municipioId } : {}),
+        ...(filtroAlcance.distritoMunicipalId ? { distritoMunicipalId: filtroAlcance.distritoMunicipalId } : {}),
+        ...(filtroAlcance.sinDistritoMunicipal === "true" ? { distritoMunicipalId: null } : {}),
         ...whereFiltros(filtros),
         ...(rango ? { createdAt: { gte: rango.inicio, lte: rango.fin } } : {}),
+        // Se aplica al final para que un coordinador con territorio asignado
+        // no pueda ver puntos fuera de su alcance aunque pase otros ids por
+        // query string — siempre gana la restricción real del usuario.
+        ...whereMilitanteAlcance(alcanceUsuario),
       },
       select: { lat: true, lng: true },
       take: 5000,
@@ -426,7 +474,7 @@ geoRouter.get(
 geoRouter.get(
   "/serie-diaria",
   asyncRoute(async (req, res) => {
-    const alcance = z
+    const filtroAlcance = z
       .object({
         provinciaId: z.string().optional(),
         municipioId: z.string().optional(),
@@ -435,7 +483,8 @@ geoRouter.get(
         dias: z.coerce.number().int().min(3).max(60).optional(),
       })
       .parse(req.query);
-    const dias = alcance.dias ?? 14;
+    const alcanceUsuario = await resolverAlcance(req.user!);
+    const dias = filtroAlcance.dias ?? 14;
     const fin = new Date();
     fin.setHours(23, 59, 59, 999);
     const inicio = new Date(fin);
@@ -443,13 +492,22 @@ geoRouter.get(
     inicio.setHours(0, 0, 0, 0);
 
     const condiciones = [Prisma.sql`"createdAt" >= ${inicio}`, Prisma.sql`"createdAt" <= ${fin}`];
-    if (alcance.provinciaId) condiciones.push(Prisma.sql`"provinciaId" = ${alcance.provinciaId}`);
-    if (alcance.municipioId) condiciones.push(Prisma.sql`"municipioId" = ${alcance.municipioId}`);
-    if (alcance.distritoMunicipalId) {
-      condiciones.push(Prisma.sql`"distritoMunicipalId" = ${alcance.distritoMunicipalId}`);
+    if (filtroAlcance.provinciaId) condiciones.push(Prisma.sql`"provinciaId" = ${filtroAlcance.provinciaId}`);
+    if (filtroAlcance.municipioId) condiciones.push(Prisma.sql`"municipioId" = ${filtroAlcance.municipioId}`);
+    if (filtroAlcance.distritoMunicipalId) {
+      condiciones.push(Prisma.sql`"distritoMunicipalId" = ${filtroAlcance.distritoMunicipalId}`);
     }
-    if (alcance.sinDistritoMunicipal === "true") {
+    if (filtroAlcance.sinDistritoMunicipal === "true") {
       condiciones.push(Prisma.sql`"distritoMunicipalId" IS NULL`);
+    }
+    // Restricción real del usuario, siempre — ver comentario equivalente en
+    // /militantes-puntos.
+    if (alcanceUsuario?.nivel === "distrito") {
+      condiciones.push(Prisma.sql`"distritoMunicipalId" = ${alcanceUsuario.distritoMunicipalId}`);
+    } else if (alcanceUsuario?.nivel === "municipio") {
+      condiciones.push(Prisma.sql`"municipioId" = ${alcanceUsuario.municipioId}`);
+    } else if (alcanceUsuario?.nivel === "provincia") {
+      condiciones.push(Prisma.sql`"provinciaId" = ${alcanceUsuario.provinciaId}`);
     }
     const where = Prisma.join(condiciones, " AND ");
 
@@ -491,6 +549,10 @@ geoRouter.get(
   "/provincias/:provinciaId",
   asyncRoute(async (req, res) => {
     const { provinciaId } = req.params;
+    const alcanceUsuario = await resolverAlcance(req.user!);
+    if (!puedeVerProvincia(alcanceUsuario, provinciaId)) {
+      throw new HttpError(403, "No tienes acceso a esta provincia");
+    }
     const provincia = await prisma.provincia.findUniqueOrThrow({ where: { id: provinciaId } });
     const [captados, metas] = await Promise.all([
       prisma.militante.count({ where: { provinciaId } }),
@@ -517,6 +579,10 @@ geoRouter.get(
   asyncRoute(async (req, res) => {
     const { municipioId } = req.params;
     const municipio = await prisma.municipio.findUniqueOrThrow({ where: { id: municipioId } });
+    const alcanceUsuario = await resolverAlcance(req.user!);
+    if (!puedeVerMunicipio(alcanceUsuario, municipioId, municipio.provinciaId)) {
+      throw new HttpError(403, "No tienes acceso a este municipio");
+    }
     const [captados, metas] = await Promise.all([
       prisma.militante.count({ where: { municipioId } }),
       metasActivasPorMunicipio(),
@@ -538,7 +604,14 @@ geoRouter.get(
   "/resumen/distrito-municipal/:distritoId",
   asyncRoute(async (req, res) => {
     const { distritoId } = req.params;
-    const distrito = await prisma.distritoMunicipal.findUniqueOrThrow({ where: { id: distritoId } });
+    const distrito = await prisma.distritoMunicipal.findUniqueOrThrow({
+      where: { id: distritoId },
+      include: { municipio: { select: { provinciaId: true } } },
+    });
+    const alcanceUsuario = await resolverAlcance(req.user!);
+    if (!puedeVerDistrito(alcanceUsuario, distrito.id, distrito.municipioId, distrito.municipio.provinciaId)) {
+      throw new HttpError(403, "No tienes acceso a este distrito municipal");
+    }
     const [captados, metas] = await Promise.all([
       prisma.militante.count({ where: { distritoMunicipalId: distritoId } }),
       metasActivasPorDistritoMunicipal(),

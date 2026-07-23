@@ -16,6 +16,16 @@ export type Usuario = {
     | "DIRIGENCIA"
     | "MILITANTE";
   secretariaId: string | null;
+  // Territorio asignado (coordinador de zona), ya resuelto con toda la
+  // cadena de ancestros (provincia → municipio → distrito) sin importar cuál
+  // de los tres es el que el usuario tiene asignado directamente — así el
+  // mapa puede ubicarse en un solo paso. Todo en null = ve el país completo.
+  alcanceProvinciaId: string | null;
+  alcanceProvinciaNombre: string | null;
+  alcanceMunicipioId: string | null;
+  alcanceMunicipioNombre: string | null;
+  alcanceDistritoId: string | null;
+  alcanceDistritoNombre: string | null;
 };
 
 type AuthContextValue = {
