@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "@cayena/database";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth, requireRole, requireModulo, resolverAlcanceSecretaria } from "../middleware/auth";
 import { asyncRoute, HttpError } from "../middleware/errorHandler";
 import { enviarPushATodos } from "../lib/push";
 
@@ -83,6 +83,7 @@ actividadesRouter.get(
 );
 
 actividadesRouter.use(requireAuth);
+actividadesRouter.use(requireModulo("actividades"));
 
 const querySchema = z.object({
   secretariaId: z.string().optional(),
@@ -99,10 +100,7 @@ actividadesRouter.get(
     if (desde) fechaFilter.gte = new Date(desde);
     if (hasta) fechaFilter.lte = new Date(hasta);
 
-    const scopedSecretariaId =
-      req.user!.role === "JEFE_SECRETARIA" || req.user!.role === "PROMOTOR"
-        ? req.user!.secretariaId ?? undefined
-        : secretariaId;
+    const scopedSecretariaId = resolverAlcanceSecretaria(req.user!) ?? secretariaId;
 
     const actividades = await prisma.actividad.findMany({
       where: {

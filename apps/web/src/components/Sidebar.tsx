@@ -22,21 +22,22 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
+import { puedeVerModulo, type Modulo } from "@cayena/shared";
 
-const NAV = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
-  { href: "/secretarias", label: "Secretarías", icon: Building2, roles: null },
-  { href: "/actividades", label: "Actividades", icon: CalendarDays, roles: null },
-  { href: "/obras", label: "Obras", icon: Landmark, roles: null },
-  { href: "/militantes", label: "Militantes", icon: MapPinned, roles: null },
-  { href: "/dia-electoral", label: "Día Electoral", icon: Vote, roles: ["SUPERADMIN", "JEFE_SECRETARIA", "PROMOTOR", "AUDITOR"] },
-  { href: "/ranking", label: "Ranking", icon: Trophy, roles: ["SUPERADMIN", "JEFE_SECRETARIA", "AUDITOR"] },
-  { href: "/gastos", label: "Gastos", icon: Wallet, roles: null },
-  { href: "/poa", label: "POA / Metas", icon: PieChart, roles: null },
-  { href: "/encuestas", label: "Encuestas", icon: ClipboardList, roles: ["SUPERADMIN", "JEFE_SECRETARIA"] },
-  { href: "/convocatorias", label: "Convocatorias", icon: Megaphone, roles: ["SUPERADMIN", "JEFE_SECRETARIA"] },
-  { href: "/usuarios", label: "Usuarios", icon: Users, roles: ["SUPERADMIN"] },
-] as const;
+const NAV: { href: string; label: string; icon: typeof LayoutDashboard; modulo: Modulo | null }[] = [
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, modulo: null },
+  { href: "/secretarias", label: "Secretarías", icon: Building2, modulo: "secretarias" },
+  { href: "/actividades", label: "Actividades", icon: CalendarDays, modulo: "actividades" },
+  { href: "/obras", label: "Obras", icon: Landmark, modulo: "obras" },
+  { href: "/militantes", label: "Militantes", icon: MapPinned, modulo: "militantes" },
+  { href: "/dia-electoral", label: "Día Electoral", icon: Vote, modulo: "dia-electoral" },
+  { href: "/ranking", label: "Ranking", icon: Trophy, modulo: "ranking" },
+  { href: "/gastos", label: "Gastos", icon: Wallet, modulo: "gastos" },
+  { href: "/poa", label: "POA / Metas", icon: PieChart, modulo: "poa" },
+  { href: "/encuestas", label: "Encuestas", icon: ClipboardList, modulo: "encuestas" },
+  { href: "/convocatorias", label: "Convocatorias", icon: Megaphone, modulo: "convocatorias" },
+  { href: "/usuarios", label: "Usuarios", icon: Users, modulo: "usuarios" },
+];
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const pathname = usePathname();
@@ -80,7 +81,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         </div>
 
         <nav className="flex-1 space-y-1 overflow-y-auto px-3">
-          {NAV.filter((item) => !item.roles || (user && (item.roles as readonly string[]).includes(user.role))).map(
+          {NAV.filter((item) => !item.modulo || (user && puedeVerModulo(user, item.modulo))).map(
             (item) => {
               const active = pathname?.startsWith(item.href);
               const Icon = item.icon;

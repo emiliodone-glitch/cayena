@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { CategoriaObra, prisma } from "@cayena/database";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth, requireRole, requireModulo } from "../middleware/auth";
 import { asyncRoute } from "../middleware/errorHandler";
 import { enviarPushATodos } from "../lib/push";
 
@@ -41,6 +41,7 @@ obrasRouter.get(
 );
 
 obrasRouter.use(requireAuth);
+obrasRouter.use(requireModulo("obras"));
 
 // Un mismo año puede referirse a la fecha de inauguración (si se cargó) o,
 // para obras antiguas sin ese dato, al año en que se registró en el sistema

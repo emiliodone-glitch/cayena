@@ -4,6 +4,7 @@ import { prisma, loadProvinciasGeo, loadMunicipiosGeo, loadDistritosMunicipalesG
 import {
   requireAuth,
   requireRole,
+  requireModulo,
   resolverAlcance,
   puedeVerProvincia,
   puedeVerMunicipio,
@@ -69,6 +70,7 @@ diaElectoralRouter.get(
 );
 
 diaElectoralRouter.use(requireAuth);
+diaElectoralRouter.use(requireModulo("dia-electoral"));
 
 // ---------------------------------------------------------------------------
 // Buscador rápido de militante (RF nuevo): para quien está haciendo llamadas

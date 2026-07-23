@@ -7,6 +7,7 @@ import { useToast } from "@/components/Toast";
 import { Drawer } from "@/components/Drawer";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { TableSkeleton } from "@/components/Skeleton";
+import { MODULOS, MODULO_LABEL, MODULOS_POR_DEFECTO_ROL, type RoleName } from "@cayena/shared";
 
 type Usuario = {
   id: string;
@@ -24,6 +25,8 @@ type Usuario = {
   municipio: { nombre: string; provinciaId: string } | null;
   distritoMunicipalId: string | null;
   distritoMunicipal: { nombre: string; municipioId: string; municipio: { provinciaId: string } } | null;
+  modulosVisibles: string[];
+  limitarASecretaria: boolean;
 };
 
 type Secretaria = { id: string; nombre: string };
@@ -45,6 +48,10 @@ const FORM_VACIO = {
   territorioProvinciaId: "",
   territorioMunicipioId: "",
   territorioDistritoId: "",
+  // Control de accesos (RF nuevo): vacío = usa los módulos por defecto de su
+  // rol (ver MODULOS_POR_DEFECTO_ROL en @cayena/shared).
+  modulosVisibles: [] as string[],
+  limitarASecretaria: false,
 };
 
 // Traduce el nivel + los tres ids del formulario a lo que espera la API
@@ -60,6 +67,13 @@ function territorioAEnviar(form: typeof FORM_VACIO) {
     default:
       return { provinciaId: null, municipioId: null, distritoMunicipalId: null };
   }
+}
+
+// Módulos efectivamente visibles para el formulario actual: la lista
+// personalizada si se tocó algo, o los valores por defecto de su rol.
+function modulosEfectivos(form: typeof FORM_VACIO): string[] {
+  if (form.modulosVisibles.length > 0) return form.modulosVisibles;
+  return MODULOS_POR_DEFECTO_ROL[form.role as RoleName] ?? [];
 }
 
 function nombreTerritorio(u: Usuario): string {
@@ -154,6 +168,8 @@ export default function UsuariosPage() {
         u.provinciaId ?? u.municipio?.provinciaId ?? u.distritoMunicipal?.municipio.provinciaId ?? "",
       territorioMunicipioId: u.municipioId ?? u.distritoMunicipal?.municipioId ?? "",
       territorioDistritoId: u.distritoMunicipalId ?? "",
+      modulosVisibles: u.modulosVisibles ?? [],
+      limitarASecretaria: u.limitarASecretaria ?? false,
     });
     setError(null);
     setDrawerAbierto(true);
@@ -489,6 +505,68 @@ export default function UsuariosPage() {
               </select>
             )}
           </div>
+
+          {form.role === "SUPERADMIN" ? (
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-500">
+              Los superadministradores siempre tienen acceso completo a todos los módulos, sin importar la
+              configuración de permisos.
+            </div>
+          ) : (
+            <div className="rounded-lg border border-gray-200 p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="block text-sm font-medium text-gray-700">Permisos de acceso</span>
+                {form.modulosVisibles.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setForm({ ...form, modulosVisibles: [] })}
+                    className="text-xs font-medium text-institucional-600 hover:underline"
+                  >
+                    Restablecer a los del rol
+                  </button>
+                )}
+              </div>
+              <p className="mb-2 text-xs text-gray-500">
+                Módulos del back office que puede ver. Sin tocar nada, usa los que corresponden por defecto a su rol.
+              </p>
+              <div className="grid grid-cols-2 gap-1.5">
+                {MODULOS.map((m) => {
+                  const efectivos = modulosEfectivos(form);
+                  const marcado = efectivos.includes(m);
+                  return (
+                    <label key={m} className="flex items-center gap-2 text-sm text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={marcado}
+                        onChange={(e) => {
+                          const base = new Set(efectivos);
+                          if (e.target.checked) base.add(m);
+                          else base.delete(m);
+                          setForm({ ...form, modulosVisibles: MODULOS.filter((mod) => base.has(mod)) });
+                        }}
+                        className="h-3.5 w-3.5 rounded border-gray-300"
+                      />
+                      {MODULO_LABEL[m]}
+                    </label>
+                  );
+                })}
+              </div>
+
+              {form.secretariaId && (
+                <label className="mt-3 flex items-center gap-2 border-t border-gray-100 pt-3 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={form.limitarASecretaria}
+                    onChange={(e) => setForm({ ...form, limitarASecretaria: e.target.checked })}
+                    className="h-3.5 w-3.5 rounded border-gray-300"
+                  />
+                  Limitar acceso a su secretaría
+                  <span className="text-xs font-normal text-gray-400">
+                    (actividades, gastos, POA y ranking solo de la suya)
+                  </span>
+                </label>
+              )}
+            </div>
+          )}
 
           {error && <p className="text-sm text-red-600">{error}</p>}
           <div className="flex gap-2 pt-2">

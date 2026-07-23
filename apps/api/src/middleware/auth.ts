@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { prisma, type Role } from "@cayena/database";
+import { puedeVerModulo, type Modulo } from "@cayena/shared";
 import { verifyAccessToken } from "../lib/jwt";
 
 export type AuthUser = {
@@ -9,6 +10,8 @@ export type AuthUser = {
   provinciaId: string | null;
   municipioId: string | null;
   distritoMunicipalId: string | null;
+  modulosVisibles: string[];
+  limitarASecretaria: boolean;
 };
 
 declare global {
@@ -35,6 +38,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
       provinciaId: payload.provinciaId ?? null,
       municipioId: payload.municipioId ?? null,
       distritoMunicipalId: payload.distritoMunicipalId ?? null,
+      modulosVisibles: payload.modulosVisibles ?? [],
+      limitarASecretaria: payload.limitarASecretaria ?? false,
     };
     next();
   } catch {
@@ -58,6 +63,40 @@ export function scopeSecretaria(req: Request, secretariaId: string): boolean {
   if (!req.user) return false;
   if (req.user.role === "SUPERADMIN" || req.user.role === "AUDITOR") return true;
   return req.user.secretariaId === secretariaId;
+}
+
+// Control de accesos por módulo (RF nuevo) — ver packages/shared/permisos.ts
+// para la lista de módulos y las reglas por defecto de cada rol.
+export function requireModulo(modulo: Modulo) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user) return res.status(401).json({ error: "No autenticado" });
+    if (!puedeVerModulo(req.user, modulo)) {
+      return res.status(403).json({ error: "No tiene acceso a este módulo" });
+    }
+    next();
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Alcance por secretaría (RF nuevo): centraliza lo que antes eran ternarias
+// repetidas en cada ruta (`role === "JEFE_SECRETARIA" ? secretariaId : ...`).
+// SUPERADMIN/AUDITOR nunca se restringen; el resto solo se limita a su propia
+// secretaría si además tiene el toggle `limitarASecretaria` activo — así
+// cualquier rol (no solo JEFE_SECRETARIA) puede quedar acotado a la suya.
+// ---------------------------------------------------------------------------
+
+export function resolverAlcanceSecretaria(user: AuthUser): string | undefined {
+  if (user.role === "SUPERADMIN" || user.role === "AUDITOR") return undefined;
+  if (user.limitarASecretaria && user.secretariaId) return user.secretariaId;
+  return undefined;
+}
+
+// Valida que la secretaría de un recurso a crear/editar caiga dentro del
+// alcance del usuario que lo está gestionando.
+export function puedeGestionarSecretaria(user: AuthUser, secretariaId: string | null | undefined): boolean {
+  const alcance = resolverAlcanceSecretaria(user);
+  if (!alcance) return true;
+  return secretariaId === alcance;
 }
 
 // ---------------------------------------------------------------------------

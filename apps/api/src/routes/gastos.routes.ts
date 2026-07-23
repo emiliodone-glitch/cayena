@@ -1,11 +1,18 @@
 import { Router } from "express";
 import { z } from "zod";
 import { TipoMovimiento, prisma } from "@cayena/database";
-import { requireAuth, requireRole } from "../middleware/auth";
+import {
+  requireAuth,
+  requireRole,
+  requireModulo,
+  resolverAlcanceSecretaria,
+  puedeGestionarSecretaria,
+} from "../middleware/auth";
 import { asyncRoute, HttpError } from "../middleware/errorHandler";
 
 export const gastosRouter = Router();
 gastosRouter.use(requireAuth);
+gastosRouter.use(requireModulo("gastos"));
 
 const querySchema = z.object({
   secretariaId: z.string().optional(),
@@ -23,8 +30,7 @@ gastosRouter.get(
     if (desde) fechaFilter.gte = new Date(desde);
     if (hasta) fechaFilter.lte = new Date(hasta);
 
-    const scopedSecretariaId =
-      req.user!.role === "JEFE_SECRETARIA" ? req.user!.secretariaId ?? undefined : secretariaId;
+    const scopedSecretariaId = resolverAlcanceSecretaria(req.user!) ?? secretariaId;
 
     const gastos = await prisma.gasto.findMany({
       where: {
@@ -65,11 +71,7 @@ gastosRouter.post(
   asyncRoute(async (req, res) => {
     if (req.user!.role === "AUDITOR") throw new HttpError(403, "Auditor es de solo lectura");
     const data = gastoSchema.parse(req.body);
-    if (
-      req.user!.role === "JEFE_SECRETARIA" &&
-      data.secretariaId &&
-      data.secretariaId !== req.user!.secretariaId
-    ) {
+    if (data.secretariaId && !puedeGestionarSecretaria(req.user!, data.secretariaId)) {
       throw new HttpError(403, "No autorizado para registrar en esta secretaría");
     }
     const gasto = await prisma.gasto.create({
@@ -85,7 +87,7 @@ gastosRouter.patch(
     if (req.user!.role === "AUDITOR") throw new HttpError(403, "Auditor es de solo lectura");
     const data = gastoSchema.partial().parse(req.body);
     const gasto = await prisma.gasto.findUniqueOrThrow({ where: { id: req.params.id } });
-    if (req.user!.role === "JEFE_SECRETARIA" && gasto.secretariaId && gasto.secretariaId !== req.user!.secretariaId) {
+    if (gasto.secretariaId && !puedeGestionarSecretaria(req.user!, gasto.secretariaId)) {
       throw new HttpError(403, "No autorizado para editar este movimiento");
     }
     const actualizado = await prisma.gasto.update({ where: { id: req.params.id }, data });

@@ -16,6 +16,9 @@ export type Usuario = {
     | "DIRIGENCIA"
     | "MILITANTE";
   secretariaId: string | null;
+  // Control de accesos por usuario (RF nuevo) — ver @cayena/shared/permisos.
+  modulosVisibles: string[];
+  limitarASecretaria: boolean;
   // Territorio asignado (coordinador de zona), ya resuelto con toda la
   // cadena de ancestros (provincia → municipio → distrito) sin importar cuál
   // de los tres es el que el usuario tiene asignado directamente — así el

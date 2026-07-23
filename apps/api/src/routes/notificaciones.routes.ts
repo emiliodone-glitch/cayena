@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "@cayena/database";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth, requireRole, requireModulo } from "../middleware/auth";
 import { asyncRoute } from "../middleware/errorHandler";
 import { enviarPushATodos } from "../lib/push";
 import { verifyAccessToken } from "../lib/jwt";
@@ -76,6 +76,7 @@ notificacionesRouter.post(
   "/",
   requireAuth,
   requireRole("SUPERADMIN", "JEFE_SECRETARIA"),
+  requireModulo("convocatorias"),
   asyncRoute(async (req, res) => {
     const { titulo, cuerpo } = convocatoriaSchema.parse(req.body);
     await enviarPushATodos(titulo, cuerpo, "CONVOCATORIA");

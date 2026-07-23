@@ -1,12 +1,13 @@
 import { Router, type Request } from "express";
 import { z } from "zod";
 import { prisma } from "@cayena/database";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth, requireRole, requireModulo } from "../middleware/auth";
 import { asyncRoute, HttpError } from "../middleware/errorHandler";
 import { estaInactiva, periodoAnterior, tieneInformeDelPeriodo, ultimaActividad } from "../lib/saludSecretaria";
 
 export const secretariasRouter = Router();
 secretariasRouter.use(requireAuth);
+secretariasRouter.use(requireModulo("secretarias"));
 
 const TITULAR_SELECT = { select: { id: true, nombre: true, email: true, active: true } } as const;
 

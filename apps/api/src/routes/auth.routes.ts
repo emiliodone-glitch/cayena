@@ -81,7 +81,17 @@ function serializarTerritorio(user: UsuarioConTerritorio) {
 // Compartido entre /login y /activar/:token: firma access+refresh token y
 // arma el mismo payload de usuario que consume el front (evita que activar
 // una cuenta deje al usuario logueado con una forma distinta a la del login).
-async function emitirSesion(user: UsuarioConTerritorio & { id: string; nombre: string; email: string; role: Role; secretariaId: string | null }) {
+async function emitirSesion(
+  user: UsuarioConTerritorio & {
+    id: string;
+    nombre: string;
+    email: string;
+    role: Role;
+    secretariaId: string | null;
+    modulosVisibles: string[];
+    limitarASecretaria: boolean;
+  },
+) {
   const accessToken = signAccessToken({
     sub: user.id,
     role: user.role,
@@ -89,6 +99,8 @@ async function emitirSesion(user: UsuarioConTerritorio & { id: string; nombre: s
     provinciaId: user.provinciaId,
     municipioId: user.municipioId,
     distritoMunicipalId: user.distritoMunicipalId,
+    modulosVisibles: user.modulosVisibles,
+    limitarASecretaria: user.limitarASecretaria,
   });
   const refreshToken = signRefreshToken(user.id);
 
@@ -109,6 +121,8 @@ async function emitirSesion(user: UsuarioConTerritorio & { id: string; nombre: s
       email: user.email,
       role: user.role,
       secretariaId: user.secretariaId,
+      modulosVisibles: user.modulosVisibles,
+      limitarASecretaria: user.limitarASecretaria,
       ...serializarTerritorio(user),
     },
   };
@@ -214,6 +228,8 @@ authRouter.post(
       provinciaId: user.provinciaId,
       municipioId: user.municipioId,
       distritoMunicipalId: user.distritoMunicipalId,
+      modulosVisibles: user.modulosVisibles,
+      limitarASecretaria: user.limitarASecretaria,
     });
     res.json({ accessToken });
   }),
@@ -245,6 +261,8 @@ authRouter.get(
       email: user.email,
       role: user.role,
       secretariaId: user.secretariaId,
+      modulosVisibles: user.modulosVisibles,
+      limitarASecretaria: user.limitarASecretaria,
       ...serializarTerritorio(user),
     });
   }),

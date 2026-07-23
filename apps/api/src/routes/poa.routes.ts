@@ -1,19 +1,19 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "@cayena/database";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, requireModulo, resolverAlcanceSecretaria, puedeGestionarSecretaria } from "../middleware/auth";
 import { asyncRoute, HttpError } from "../middleware/errorHandler";
 
 export const poaRouter = Router();
 poaRouter.use(requireAuth);
+poaRouter.use(requireModulo("poa"));
 
 // RF-18 + RF-20: metas del POA con su avance para graficar (barra/dona)
 poaRouter.get(
   "/",
   asyncRoute(async (req, res) => {
     const { secretariaId } = req.query as { secretariaId?: string };
-    const scopedSecretariaId =
-      req.user!.role === "JEFE_SECRETARIA" ? req.user!.secretariaId ?? undefined : secretariaId;
+    const scopedSecretariaId = resolverAlcanceSecretaria(req.user!) ?? secretariaId;
 
     const metas = await prisma.metaPOA.findMany({
       where: scopedSecretariaId ? { secretariaId: scopedSecretariaId } : {},
@@ -45,7 +45,7 @@ poaRouter.post(
   asyncRoute(async (req, res) => {
     if (req.user!.role === "AUDITOR") throw new HttpError(403, "Auditor es de solo lectura");
     const data = metaPoaSchema.parse(req.body);
-    if (req.user!.role === "JEFE_SECRETARIA" && data.secretariaId !== req.user!.secretariaId) {
+    if (!puedeGestionarSecretaria(req.user!, data.secretariaId)) {
       throw new HttpError(403, "No autorizado para esta secretaría");
     }
     const meta = await prisma.metaPOA.create({ data });
@@ -62,7 +62,7 @@ poaRouter.post(
     if (req.user!.role === "AUDITOR") throw new HttpError(403, "Auditor es de solo lectura");
     const data = avanceSchema.parse(req.body);
     const metaPoa = await prisma.metaPOA.findUniqueOrThrow({ where: { id: req.params.id } });
-    if (req.user!.role === "JEFE_SECRETARIA" && metaPoa.secretariaId !== req.user!.secretariaId) {
+    if (!puedeGestionarSecretaria(req.user!, metaPoa.secretariaId)) {
       throw new HttpError(403, "No autorizado para esta secretaría");
     }
     const avance = await prisma.avancePOA.create({
@@ -80,10 +80,10 @@ poaRouter.patch(
     if (req.user!.role === "AUDITOR") throw new HttpError(403, "Auditor es de solo lectura");
     const data = metaPoaUpdateSchema.parse(req.body);
     const metaPoa = await prisma.metaPOA.findUniqueOrThrow({ where: { id: req.params.id } });
-    if (req.user!.role === "JEFE_SECRETARIA" && metaPoa.secretariaId !== req.user!.secretariaId) {
+    if (!puedeGestionarSecretaria(req.user!, metaPoa.secretariaId)) {
       throw new HttpError(403, "No autorizado para esta secretaría");
     }
-    if (req.user!.role === "JEFE_SECRETARIA" && data.secretariaId && data.secretariaId !== req.user!.secretariaId) {
+    if (data.secretariaId && !puedeGestionarSecretaria(req.user!, data.secretariaId)) {
       throw new HttpError(403, "No autorizado para esta secretaría");
     }
     const actualizada = await prisma.metaPOA.update({ where: { id: req.params.id }, data });
@@ -96,7 +96,7 @@ poaRouter.delete(
   asyncRoute(async (req, res) => {
     if (req.user!.role === "AUDITOR") throw new HttpError(403, "Auditor es de solo lectura");
     const metaPoa = await prisma.metaPOA.findUniqueOrThrow({ where: { id: req.params.id } });
-    if (req.user!.role === "JEFE_SECRETARIA" && metaPoa.secretariaId !== req.user!.secretariaId) {
+    if (!puedeGestionarSecretaria(req.user!, metaPoa.secretariaId)) {
       throw new HttpError(403, "No autorizado para esta secretaría");
     }
     // AvancePOA tiene onDelete: Cascade, así que sus avances se eliminan junto con la meta.

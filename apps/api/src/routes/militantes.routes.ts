@@ -3,7 +3,14 @@ import multer from "multer";
 import { parse } from "csv-parse/sync";
 import { z } from "zod";
 import { prisma } from "@cayena/database";
-import { requireAuth, requireRole, resolverAlcance, whereMilitanteAlcance, puedeGestionarMilitante } from "../middleware/auth";
+import {
+  requireAuth,
+  requireRole,
+  requireModulo,
+  resolverAlcance,
+  whereMilitanteAlcance,
+  puedeGestionarMilitante,
+} from "../middleware/auth";
 import { asyncRoute, HttpError } from "../middleware/errorHandler";
 import { otorgarInsigniaBienvenida } from "../lib/gamificacion";
 import { calcularRango, type Periodo } from "../lib/periodo";
@@ -91,6 +98,7 @@ militantesRouter.get(
 );
 
 militantesRouter.use(requireAuth);
+militantesRouter.use(requireModulo("militantes"));
 
 // Fase 2 — carnet digital con QR: el QR codifica el id interno del militante;
 // el back office lo verifica escaneándolo/pegándolo aquí (RF de "Carnet digital con código QR").

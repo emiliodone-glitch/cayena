@@ -3,7 +3,8 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { z } from "zod";
 import { Role, prisma } from "@cayena/database";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { MODULOS } from "@cayena/shared";
+import { requireAuth, requireRole, requireModulo, resolverAlcanceSecretaria } from "../middleware/auth";
 import { asyncRoute, HttpError } from "../middleware/errorHandler";
 import { calcularRango, type Periodo } from "../lib/periodo";
 
@@ -41,8 +42,9 @@ const rankingQuerySchema = z.object({
 usuariosRouter.get(
   "/ranking-captacion",
   requireRole("SUPERADMIN", "JEFE_SECRETARIA", "AUDITOR"),
+  requireModulo("ranking"),
   asyncRoute(async (req, res) => {
-    const scopedSecretariaId = req.user!.role === "JEFE_SECRETARIA" ? req.user!.secretariaId ?? undefined : undefined;
+    const scopedSecretariaId = resolverAlcanceSecretaria(req.user!);
     const { periodo, desde, hasta } = rankingQuerySchema.parse(req.query);
     const rangoFecha =
       periodo && periodo !== "todo" ? calcularRango(periodo as Periodo, desde, hasta) : null;
@@ -84,6 +86,7 @@ usuariosRouter.get(
 );
 
 usuariosRouter.use(requireRole("SUPERADMIN"));
+usuariosRouter.use(requireModulo("usuarios"));
 
 // RF-21
 usuariosRouter.get(
@@ -118,6 +121,13 @@ function unSoloTerritorio(v: {
   return [v.provinciaId, v.municipioId, v.distritoMunicipalId].filter((x) => !!x).length <= 1;
 }
 
+// Control de accesos por usuario (RF nuevo): vacío = usa los valores por
+// defecto de su rol (ver MODULOS_POR_DEFECTO_ROL en @cayena/shared).
+const permisosSchema = {
+  modulosVisibles: z.array(z.enum(MODULOS)).optional(),
+  limitarASecretaria: z.boolean().optional(),
+};
+
 const crearUsuarioSchema = z
   .object({
     email: z.string().email(),
@@ -130,6 +140,7 @@ const crearUsuarioSchema = z
     provinciaId: z.string().nullable().optional(),
     municipioId: z.string().nullable().optional(),
     distritoMunicipalId: z.string().nullable().optional(),
+    ...permisosSchema,
   })
   .refine(unSoloTerritorio, { message: "Solo se puede asignar un nivel de territorio: provincia, municipio o distrito" });
 
@@ -150,6 +161,8 @@ usuariosRouter.post(
         provinciaId: data.provinciaId,
         municipioId: data.municipioId,
         distritoMunicipalId: data.distritoMunicipalId,
+        modulosVisibles: data.modulosVisibles,
+        limitarASecretaria: data.limitarASecretaria,
       },
     });
     const { passwordHash: _ph, ...rest } = usuario;
@@ -170,6 +183,7 @@ const actualizarUsuarioSchema = z
     provinciaId: z.string().nullable().optional(),
     municipioId: z.string().nullable().optional(),
     distritoMunicipalId: z.string().nullable().optional(),
+    ...permisosSchema,
   })
   .refine(unSoloTerritorio, { message: "Solo se puede asignar un nivel de territorio: provincia, municipio o distrito" });
 

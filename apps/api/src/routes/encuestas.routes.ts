@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "@cayena/database";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth, requireRole, requireModulo } from "../middleware/auth";
 import { asyncRoute, HttpError } from "../middleware/errorHandler";
 
 export const encuestasRouter = Router();
@@ -47,6 +47,7 @@ encuestasRouter.post(
 encuestasRouter.get(
   "/:id/resultados",
   requireAuth,
+  requireModulo("encuestas"),
   asyncRoute(async (req, res) => {
     const encuesta = await prisma.encuesta.findUniqueOrThrow({
       where: { id: req.params.id },
@@ -68,6 +69,7 @@ encuestasRouter.get(
 );
 
 encuestasRouter.use(requireAuth);
+encuestasRouter.use(requireModulo("encuestas"));
 
 encuestasRouter.get(
   "/",

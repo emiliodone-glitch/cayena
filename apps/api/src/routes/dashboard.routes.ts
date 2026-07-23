@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "@cayena/database";
 import { calcularEstadoAvance, calcularPorcentaje } from "@cayena/shared";
-import { requireAuth, requireRole, type AuthUser } from "../middleware/auth";
+import { requireAuth, requireRole, resolverAlcanceSecretaria, type AuthUser } from "../middleware/auth";
 import { asyncRoute } from "../middleware/errorHandler";
 import { verificarEstancamientoMetas } from "../lib/alertas";
 import { obtenerAvancePorProvincia } from "../lib/geoStats";
@@ -127,24 +127,27 @@ async function resumenGeneral(
     bottomProvincias: [...provinciasOrdenadas].reverse().slice(0, 5),
   };
 
-  // Fase 2 — dashboard enfocado en su propia secretaría para jefe/promotor.
-  if ((user.role === "JEFE_SECRETARIA" || user.role === "PROMOTOR") && user.secretariaId) {
+  // Fase 2 — dashboard enfocado en su propia secretaría para quien tenga el
+  // alcance limitado a ella (jefe/promotor por defecto, o cualquier otro rol
+  // al que se le active el toggle "limitar a su secretaría").
+  const secretariaAlcance = resolverAlcanceSecretaria(user);
+  if (secretariaAlcance) {
     const [secretaria, actividadesSecretaria, gastosSecretariaAgg, metasPoa, militantesEquipo] = await Promise.all([
-      prisma.secretaria.findUnique({ where: { id: user.secretariaId } }),
+      prisma.secretaria.findUnique({ where: { id: secretariaAlcance } }),
       prisma.actividad.findMany({
-        where: { secretariaId: user.secretariaId },
+        where: { secretariaId: secretariaAlcance },
         orderBy: { fecha: "desc" },
         take: 5,
       }),
       prisma.gasto.aggregate({
-        where: { secretariaId: user.secretariaId, tipo: "GASTO", fecha: { gte: inicio, lte: fin } },
+        where: { secretariaId: secretariaAlcance, tipo: "GASTO", fecha: { gte: inicio, lte: fin } },
         _sum: { monto: true },
       }),
       prisma.metaPOA.findMany({
-        where: { secretariaId: user.secretariaId },
+        where: { secretariaId: secretariaAlcance },
         include: { avances: true },
       }),
-      prisma.militante.count({ where: { capturadoPor: { secretariaId: user.secretariaId } } }),
+      prisma.militante.count({ where: { capturadoPor: { secretariaId: secretariaAlcance } } }),
     ]);
 
     const poaResumen = metasPoa.map((m) => {

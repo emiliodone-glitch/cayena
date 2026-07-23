@@ -205,6 +205,17 @@ model User {
   distritoMunicipalId String?
   distritoMunicipal   DistritoMunicipal? @relation("ResponsableDistrito", fields: [distritoMunicipalId], references: [id])
 
+  // Control de accesos por usuario (RF nuevo): módulos del back office que
+  // puede ver, más allá de lo que ya filtra el rol. Vacío = usa los valores
+  // por defecto de su rol (ver MODULOS_POR_DEFECTO_ROL en @cayena/shared) —
+  // así activar esta columna no le cambia el acceso a nadie sin querer.
+  modulosVisibles String[] @default([])
+  // Si es true, además de su secretaria propia, sus consultas (actividades,
+  // gastos, POA, ranking, etc.) se limitan a esa secretaría en vez de ver
+  // todas — pensado para JEFE_SECRETARIA/PROMOTOR que solo deben operar la
+  // suya, sin tener que tocar el alcance geográfico que ya existe.
+  limitarASecretaria Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

@@ -14,6 +14,11 @@ export type AccessTokenPayload = {
   provinciaId: string | null;
   municipioId: string | null;
   distritoMunicipalId: string | null;
+  // Control de accesos por usuario — ver comentario en el modelo User.
+  // Viaja en el token por la misma razón que el territorio: evitar una
+  // consulta extra a la BD en cada request.
+  modulosVisibles: string[];
+  limitarASecretaria: boolean;
 };
 
 export function signAccessToken(payload: AccessTokenPayload): string {
