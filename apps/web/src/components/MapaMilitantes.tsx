@@ -255,6 +255,20 @@ function construirQueryFiltros(f: FiltrosMapa): string {
   return s ? `?${s}` : "";
 }
 
+// Misma regla de ruta que usa el efecto principal de geo — se extrae acá
+// para que la comparación de períodos pueda pedir el mismo nivel/demarcación
+// actual con un `periodo` propio, sin duplicar la lógica de niveles.
+function construirRutaGeo(
+  nivel: "nacional" | "municipios" | "distritos",
+  provinciaId: string | undefined,
+  municipioId: string | undefined,
+  qs: string,
+): string {
+  if (nivel === "nacional") return `/geo/provincias${qs}`;
+  if (nivel === "municipios") return `/geo/provincias/${provinciaId}/municipios${qs}`;
+  return `/geo/municipios/${municipioId}/distritos-municipales${qs}`;
+}
+
 export function MapaMilitantes({
   compacto = false,
   alto,
@@ -333,6 +347,17 @@ export function MapaMilitantes({
   const [refreshVivo, setRefreshVivo] = useState(0);
   const [enVivo, setEnVivo] = useState(false);
 
+  // Comparación de dos períodos lado a lado: dos "fotos" del mismo nivel y
+  // demarcación actual, cada una con su propio filtro de período — un
+  // vistazo directo de antes/después en vez de solo la cifra ▲/▼ del panel.
+  const [compararAbierto, setCompararAbierto] = useState(false);
+  const [periodoA, setPeriodoA] = useState<FiltrosMapa["periodo"]>(undefined);
+  const [periodoB, setPeriodoB] = useState<FiltrosMapa["periodo"]>("mes");
+  const [geoA, setGeoA] = useState<FeatureCollection | null>(null);
+  const [geoB, setGeoB] = useState<FeatureCollection | null>(null);
+  const canvasARef = useRef<HTMLCanvasElement | null>(null);
+  const canvasBRef = useRef<HTMLCanvasElement | null>(null);
+
   const mapRef = useRef<LeafletMap | null>(null);
   const geoLayerRef = useRef<L.GeoJSON | null>(null);
   // Mapa de elemento DOM -> layer de Leaflet, reconstruido cada vez que se
@@ -380,12 +405,7 @@ export function MapaMilitantes({
     resaltadoRef.current = null;
     ultimoTapRef.current = null;
     const qs = construirQueryFiltros(filtros);
-    const path =
-      nivel === "nacional"
-        ? `/geo/provincias${qs}`
-        : nivel === "municipios"
-          ? `/geo/provincias/${provinciaSeleccionada?.id}/municipios${qs}`
-          : `/geo/municipios/${municipioSeleccionado?.id}/distritos-municipales${qs}`;
+    const path = construirRutaGeo(nivel, provinciaSeleccionada?.id, municipioSeleccionado?.id, qs);
     apiFetch<FeatureCollection>(path)
       .then((data) => {
         if (cancelado) return;
@@ -470,6 +490,110 @@ export function MapaMilitantes({
       heatLayerRef.current = null;
     };
   }, []);
+
+  // Comparación de períodos: dos fetches independientes del mismo
+  // nivel/demarcación que ya se está viendo, cada uno con su propio
+  // `periodo` — no toca los filtros del mapa principal.
+  useEffect(() => {
+    if (!compararAbierto) return;
+    let cancelado = false;
+    const rutaA = construirRutaGeo(
+      nivel,
+      provinciaSeleccionada?.id,
+      municipioSeleccionado?.id,
+      construirQueryFiltros({ ...filtros, periodo: periodoA }),
+    );
+    const rutaB = construirRutaGeo(
+      nivel,
+      provinciaSeleccionada?.id,
+      municipioSeleccionado?.id,
+      construirQueryFiltros({ ...filtros, periodo: periodoB }),
+    );
+    apiFetch<FeatureCollection>(rutaA).then((d) => !cancelado && setGeoA(d));
+    apiFetch<FeatureCollection>(rutaB).then((d) => !cancelado && setGeoB(d));
+    return () => {
+      cancelado = true;
+    };
+  }, [compararAbierto, periodoA, periodoB, nivel, provinciaSeleccionada?.id, municipioSeleccionado?.id, filtros, refreshVivo]);
+
+  // Dibuja un choropleth simplificado (mismo cálculo de proyección que el
+  // canvas de exportación, sin título/leyenda propios — esos van en el HTML
+  // alrededor de cada canvas) en el elemento que se le pase.
+  function dibujarComparacion(canvas: HTMLCanvasElement | null, datos: FeatureCollection | null) {
+    if (!canvas || !datos) return;
+    const W = canvas.width;
+    const H = canvas.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "#f0fdf4";
+    ctx.fillRect(0, 0, W, H);
+
+    let minLat = Infinity,
+      maxLat = -Infinity,
+      minLng = Infinity,
+      maxLng = -Infinity;
+    for (const f of datos.features) {
+      for (const anillo of anillosDe(f)) {
+        for (const [lng, lat] of anillo) {
+          if (lat < minLat) minLat = lat;
+          if (lat > maxLat) maxLat = lat;
+          if (lng < minLng) minLng = lng;
+          if (lng > maxLng) maxLng = lng;
+        }
+      }
+    }
+    const M = 10;
+    const factorLng = Math.cos(((minLat + maxLat) / 2) * (Math.PI / 180));
+    const escala = Math.min((W - 2 * M) / ((maxLng - minLng) * factorLng), (H - 2 * M) / (maxLat - minLat));
+    const offX = M + (W - 2 * M - (maxLng - minLng) * factorLng * escala) / 2;
+    const offY = M + (H - 2 * M - (maxLat - minLat) * escala) / 2;
+    const px = (lng: number) => offX + (lng - minLng) * factorLng * escala;
+    const py = (lat: number) => offY + (maxLat - lat) * escala;
+
+    for (const f of datos.features) {
+      const props = f.properties as Propiedades;
+      ctx.fillStyle =
+        modoColor === "electorado" ? colorPenetracion(props.penetracion) : COLOR_ESTADO[props.estado ?? "rojo"];
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1;
+      for (const anillo of anillosDe(f)) {
+        ctx.beginPath();
+        anillo.forEach(([lng, lat], i) => {
+          if (i === 0) ctx.moveTo(px(lng), py(lat));
+          else ctx.lineTo(px(lng), py(lat));
+        });
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+  }
+
+  useEffect(() => {
+    dibujarComparacion(canvasARef.current, geoA);
+    // compararAbierto en las dependencias: al reabrir el panel, el <canvas>
+    // es un nodo del DOM nuevo (vacío) — sin esto no se redibujaría hasta
+    // el próximo fetch, aunque geoA no haya cambiado.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geoA, modoColor, compararAbierto]);
+
+  useEffect(() => {
+    dibujarComparacion(canvasBRef.current, geoB);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geoB, modoColor, compararAbierto]);
+
+  // Cuando hay un período aplicado, el backend manda captadosFiltrados
+  // (solo lo registrado en esa ventana) — eso es lo que hay que sumar para
+  // comparar "cuánto se captó en cada período", no el total histórico
+  // (militantesCaptados), que sería igual en ambos lados.
+  function totalCaptados(datos: FeatureCollection | null): number {
+    if (!datos) return 0;
+    return datos.features.reduce((s, f) => {
+      const p = f.properties as Propiedades;
+      return s + (p.captadosFiltrados ?? p.militantesCaptados ?? 0);
+    }, 0);
+  }
 
   // Catálogo para el buscador (una sola vez) y promotores para el filtro.
   useEffect(() => {
@@ -1385,6 +1509,17 @@ export function MapaMilitantes({
             >
               ⤓ PDF
             </button>
+            <button
+              onClick={() => setCompararAbierto((v) => !v)}
+              className={`rounded-lg border px-2.5 py-1 text-xs font-medium ${
+                compararAbierto
+                  ? "border-institucional-600 bg-institucional-600 text-white"
+                  : "border-institucional-600 text-institucional-700 hover:bg-institucional-50"
+              }`}
+              title="Comparar dos períodos lado a lado en esta misma demarcación"
+            >
+              ⇄ Comparar
+            </button>
           </div>
         </div>
       )}
@@ -1492,6 +1627,43 @@ export function MapaMilitantes({
                 </CircleMarker>
               ))}
           </MapContainer>
+        </div>
+      )}
+
+      {compararAbierto && (
+        <div className="mt-3 grid grid-cols-1 gap-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm sm:grid-cols-2">
+          {(
+            [
+              { periodo: periodoA, setPeriodo: setPeriodoA, canvasRef: canvasARef, geo: geoA, etiqueta: "Período A" },
+              { periodo: periodoB, setPeriodo: setPeriodoB, canvasRef: canvasBRef, geo: geoB, etiqueta: "Período B" },
+            ] as const
+          ).map((col) => (
+            <div key={col.etiqueta}>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold uppercase text-gray-400">{col.etiqueta}</span>
+                <select
+                  value={col.periodo ?? ""}
+                  onChange={(e) => col.setPeriodo((e.target.value || undefined) as FiltrosMapa["periodo"])}
+                  className="rounded-lg border border-gray-300 px-2 py-1 text-xs focus:border-institucional-600 focus:outline-none"
+                >
+                  <option value="">Histórico completo</option>
+                  <option value="semana">Última semana</option>
+                  <option value="mes">Este mes</option>
+                  <option value="trimestre">Este trimestre</option>
+                </select>
+              </div>
+              <canvas
+                ref={col.canvasRef}
+                width={520}
+                height={360}
+                className="w-full rounded-lg border border-gray-100"
+              />
+              <div className="mt-1 text-xs text-gray-500">
+                Militantes captados en el período:{" "}
+                <span className="font-semibold text-gray-900">{totalCaptados(col.geo).toLocaleString("es-DO")}</span>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
