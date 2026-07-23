@@ -22,16 +22,28 @@ type ProvinciaResumen = {
   estado: "rojo" | "amarillo" | "verde";
 };
 
+type SecretariaResumen = {
+  id: string;
+  nombre: string;
+  descripcion: string | null;
+  titular: string | null;
+  actividadesPublicas: number;
+  objetivosTotales: number;
+  avancePromedioObjetivos: number | null;
+};
+
 const ESTADO_COLOR: Record<string, string> = { rojo: "#dc2626", amarillo: "#f59e0b", verde: "#16a34a" };
 const fmtMoney = new Intl.NumberFormat("es-DO", { style: "currency", currency: "DOP", maximumFractionDigits: 0 });
 
 export default function TransparenciaPage() {
   const [resumen, setResumen] = useState<Resumen | null>(null);
   const [provincias, setProvincias] = useState<ProvinciaResumen[]>([]);
+  const [secretarias, setSecretarias] = useState<SecretariaResumen[]>([]);
 
   useEffect(() => {
     fetch(`${API_URL}/transparencia/resumen`).then((r) => r.json()).then(setResumen);
     fetch(`${API_URL}/transparencia/provincias`).then((r) => r.json()).then(setProvincias);
+    fetch(`${API_URL}/transparencia/secretarias`).then((r) => r.json()).then(setSecretarias);
   }, []);
 
   const gastoTotal = resumen?.finanzas.filter((f) => f.tipo === "GASTO").reduce((s, f) => s + f.total, 0) ?? 0;
@@ -81,6 +93,25 @@ export default function TransparenciaPage() {
             {resumen && resumen.obrasPorCategoria.length === 0 && (
               <p className="text-sm text-gray-400">Aún no hay obras publicadas.</p>
             )}
+          </div>
+        </div>
+
+        <div className="mb-8 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+          <h2 className="mb-4 text-sm font-semibold text-gray-700">Secretarías y su gestión</h2>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {secretarias.map((s) => (
+              <div key={s.id} className="rounded-lg border border-gray-100 p-3">
+                <div className="font-semibold text-institucional-900">{s.nombre}</div>
+                <div className="text-xs text-gray-500">{s.titular ? `Titular: ${s.titular}` : "Vacante"}</div>
+                <div className="mt-2 flex items-center gap-4 text-xs text-gray-500">
+                  <span>{s.actividadesPublicas} actividades</span>
+                  {s.avancePromedioObjetivos != null && (
+                    <span className="font-semibold text-institucional-700">{s.avancePromedioObjetivos}% de objetivos</span>
+                  )}
+                </div>
+              </div>
+            ))}
+            {secretarias.length === 0 && <p className="col-span-full text-sm text-gray-400">Aún no hay secretarías registradas.</p>}
           </div>
         </div>
 

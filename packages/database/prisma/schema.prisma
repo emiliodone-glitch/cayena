@@ -165,6 +165,12 @@ model User {
   // Alcance del promotor/jefe de secretaría
   secretariaId String?
   secretaria   Secretaria? @relation(fields: [secretariaId], references: [id])
+  // Rol dentro del equipo de la secretaría (ej. "Titular", "Vocal",
+  // "Coordinador provincial") — solo tiene sentido con secretariaId puesto.
+  // Quién es el TITULAR formal (el cargo, no cualquier miembro del equipo)
+  // se define aparte en Secretaria.titularId; esto es solo la etiqueta
+  // visible del rol de cada persona dentro del equipo.
+  cargoSecretaria String?
 
   // Territorio asignado (coordinador de zona): a lo sumo uno de los tres
   // debiera estar presente a la vez (se valida en la app, no en la BD) — el
@@ -190,6 +196,9 @@ model User {
   refreshTokens      RefreshToken[]
   notificacionesRecibidas Notificacion[] @relation("NotificacionDestinatario")
   deviceTokens       DeviceToken[]
+  secretariasComoTitular    Secretaria[]                 @relation("TitularActual")
+  historialTitularidades    HistorialTitularSecretaria[] @relation("HistorialTitular")
+  informesSubidos           InformeSecretaria[]          @relation("InformeAutor")
 }
 
 model RefreshToken {
@@ -209,11 +218,27 @@ model Secretaria {
   nombre      String  @unique
   descripcion String?
 
-  usuarios    User[]
-  actividades Actividad[]
-  documentos  DocumentoSecretaria[]
-  gastos      Gasto[]
-  metasPoa    MetaPOA[]
+  // Titular actual (cargo formal, uno solo a la vez). Distinto de
+  // `usuarios` (el equipo completo: cualquier User con secretariaId
+  // apuntando acá, titular incluido) — separar el cargo del simple
+  // vínculo permite llevar historial de quién lo ha ocupado (ver
+  // HistorialTitularSecretaria) sin depender de que el sistema adivine
+  // "el titular" buscando un JEFE_SECRETARIA cualquiera del equipo.
+  titularId String?
+  titular   User?   @relation("TitularActual", fields: [titularId], references: [id])
+
+  // Presupuesto asignado para el período vigente (RD$). El ejecutado se
+  // calcula sumando Gasto (tipo GASTO) vinculado a esta secretaría — no se
+  // duplica ese dato acá.
+  presupuestoAsignado Decimal? @db.Decimal(14, 2)
+
+  usuarios          User[]
+  actividades       Actividad[]
+  documentos        DocumentoSecretaria[]
+  gastos            Gasto[]
+  metasPoa          MetaPOA[]
+  informes          InformeSecretaria[]
+  historialTitulares HistorialTitularSecretaria[]
 
   createdAt DateTime @default(now())
 }
@@ -227,6 +252,45 @@ model DocumentoSecretaria {
   subidoPorId  String?
   createdAt    DateTime   @default(now())
 
+  @@index([secretariaId])
+}
+
+// Registro histórico de quién ha ocupado la titularidad de cada secretaría
+// — al cambiar Secretaria.titularId se cierra la fila abierta (hasta =
+// ahora) y se abre una nueva. nombreTitular queda como "foto" del nombre al
+// momento de la designación: si el usuario cambia de nombre después, o la
+// cuenta se reutiliza, el historial no se reescribe solo.
+model HistorialTitularSecretaria {
+  id           String     @id @default(cuid())
+  secretariaId String
+  secretaria   Secretaria @relation(fields: [secretariaId], references: [id])
+  userId       String
+  user         User       @relation("HistorialTitular", fields: [userId], references: [id])
+  nombreTitular String
+  desde        DateTime   @default(now())
+  hasta        DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([secretariaId])
+}
+
+// Rendición de cuentas periódica (RF nuevo): un informe de gestión por
+// secretaría y período (p.ej. "2026-07"). Se usa tanto para exigirle a cada
+// titular reportar avance con regularidad como para alertar cuando el
+// período vigente se queda sin informe (ver lib/alertas.ts).
+model InformeSecretaria {
+  id           String     @id @default(cuid())
+  secretariaId String
+  secretaria   Secretaria @relation(fields: [secretariaId], references: [id])
+  periodo      String // "YYYY-MM"
+  resumen      String
+  archivoUrl   String?
+  subidoPorId  String?
+  subidoPor    User?      @relation("InformeAutor", fields: [subidoPorId], references: [id])
+  createdAt    DateTime   @default(now())
+
+  @@unique([secretariaId, periodo])
   @@index([secretariaId])
 }
 

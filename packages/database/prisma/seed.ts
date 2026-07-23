@@ -43,29 +43,31 @@ async function seedGeografia() {
 
 // Organigrama oficial vigente: nombre corto (como ya se venía usando en el
 // resto de la app — dropdowns, tarjetas, etc. — que muestran el nombre tal
-// cual, sin anteponerle "Secretaría de") + el titular actual en la
-// descripción. "Vacante / sin titular" cuando no hay nadie designado.
+// cual, sin anteponerle "Secretaría de"). El titular ya NO se guarda como
+// texto en la descripción — ahora es un campo relacional propio
+// (Secretaria.titularId, ver seedTitulares) que la UI muestra de forma
+// estructurada, así que acá solo queda el nombre.
 const SECRETARIAS = [
-  { nombre: "Organización", descripcion: "Titular: Bautista Rojas Gómez" },
-  { nombre: "Propaganda", descripcion: "Titular: César Arturo Fernández" },
-  { nombre: "Informática", descripcion: "Titular: Domingo Tavárez" },
-  { nombre: "Gestión Operativa y Eventos", descripcion: "Titular: Franklin de Jesús Labour" },
-  { nombre: "Formación Política", descripcion: "Vacante / sin titular" },
-  { nombre: "Movilidad y Transporte", descripcion: "Titular: Germán Peña Guadalupe" },
-  { nombre: "Fiscalización, Evaluación y Control", descripcion: "Titular: Luis Daniel Beltré López" },
-  { nombre: "Asuntos Electorales", descripcion: "Titular: Luis Toral Córdova" },
-  { nombre: "Finanzas", descripcion: "Titular: Nicolás Calderón" },
-  { nombre: "Comunicación", descripcion: "Titular: Rafael Omar Liriano" },
-  { nombre: "Ética, Transparencia y Rendición de Cuentas", descripcion: "Titular: Ruth Divina Méndez" },
-  { nombre: "Asuntos Profesionales y Gremiales", descripcion: "Titular: Freddy Pérez" },
-  { nombre: "Asuntos Laborales", descripcion: "Titular: Nelsida Marmolejos" },
-  { nombre: "Deportes", descripcion: 'Titular: Felipe "Jay" Payano' },
-  { nombre: "de la Mujer", descripcion: "Titular: Angie Brooks" },
-  { nombre: "Relación entre Partidos Políticos y Sociedad Civil", descripcion: "Titular: Aníbal García Duvergé" },
-  { nombre: "Juventud", descripcion: "Titular: Lenin Campos" },
-  { nombre: "Asuntos Comunitarios", descripcion: "Titular: Juana Sánchez" },
-  { nombre: "Cultos", descripcion: "Titular: Francisco Cruz Pascual" },
-  { nombre: "Niños, Niñas y Adolescentes", descripcion: "Titular: Milqueya Emilia Monteagudo" },
+  { nombre: "Organización" },
+  { nombre: "Propaganda" },
+  { nombre: "Informática" },
+  { nombre: "Gestión Operativa y Eventos" },
+  { nombre: "Formación Política" },
+  { nombre: "Movilidad y Transporte" },
+  { nombre: "Fiscalización, Evaluación y Control" },
+  { nombre: "Asuntos Electorales" },
+  { nombre: "Finanzas" },
+  { nombre: "Comunicación" },
+  { nombre: "Ética, Transparencia y Rendición de Cuentas" },
+  { nombre: "Asuntos Profesionales y Gremiales" },
+  { nombre: "Asuntos Laborales" },
+  { nombre: "Deportes" },
+  { nombre: "de la Mujer" },
+  { nombre: "Relación entre Partidos Políticos y Sociedad Civil" },
+  { nombre: "Juventud" },
+  { nombre: "Asuntos Comunitarios" },
+  { nombre: "Cultos" },
+  { nombre: "Niños, Niñas y Adolescentes" },
 ];
 
 // Secretarías que existían en un organigrama anterior y ya no están en la
@@ -102,7 +104,7 @@ async function seedSecretarias() {
   for (const s of SECRETARIAS) {
     await prisma.secretaria.upsert({
       where: { nombre: s.nombre },
-      update: { descripcion: s.descripcion },
+      update: {},
       create: s,
     });
   }
@@ -162,12 +164,32 @@ const TITULARES = [
   },
 ];
 
+// Limpieza de un dato de una versión anterior de este seed: antes de existir
+// Secretaria.titularId (campo relacional), el nombre del titular se guardaba
+// como texto plano en la descripción ("Titular: Fulano de Tal"). Con el
+// campo relacional ya en su lugar, ese texto quedaría duplicado en pantalla
+// — se limpia solo si coincide exactamente con lo que este mismo seed
+// escribió antes (nunca toca una descripción distinta que alguien haya
+// escrito a mano después).
+async function limpiarDescripcionTitularLegado() {
+  for (const t of TITULARES) {
+    await prisma.secretaria.updateMany({
+      where: { nombre: t.secretaria, descripcion: `Titular: ${t.nombre}` },
+      data: { descripcion: null },
+    });
+  }
+  await prisma.secretaria.updateMany({
+    where: { nombre: "Formación Política", descripcion: "Vacante / sin titular" },
+    data: { descripcion: null },
+  });
+}
+
 async function seedTitulares() {
   const passwordHash = await bcrypt.hash(crypto.randomUUID(), 10);
   let creados = 0;
   for (const t of TITULARES) {
     const secretaria = await prisma.secretaria.findUniqueOrThrow({ where: { nombre: t.secretaria } });
-    await prisma.user.upsert({
+    const usuario = await prisma.user.upsert({
       where: { email: t.email },
       update: {},
       create: {
@@ -176,10 +198,30 @@ async function seedTitulares() {
         nombre: t.nombre,
         role: Role.JEFE_SECRETARIA,
         secretariaId: secretaria.id,
+        cargoSecretaria: "Titular",
         active: false,
       },
     });
     creados++;
+
+    // Estos 19 usuarios ya existían desde antes de que cargoSecretaria
+    // existiera como campo (la migración lo deja en null en filas viejas) —
+    // el upsert de arriba no lo toca en el `update` a propósito, para no
+    // pisar un cargo que alguien haya personalizado después. Se completa
+    // acá solo si sigue vacío.
+    if (!usuario.cargoSecretaria) {
+      await prisma.user.update({ where: { id: usuario.id }, data: { cargoSecretaria: "Titular" } });
+    }
+
+    // Deja asentado desde ya quién es el titular formal (Secretaria.titularId)
+    // y abre su fila en el historial — así el historial no arranca vacío el
+    // día que alguien entre a mirarlo.
+    if (secretaria.titularId !== usuario.id) {
+      await prisma.secretaria.update({ where: { id: secretaria.id }, data: { titularId: usuario.id } });
+      await prisma.historialTitularSecretaria.create({
+        data: { secretariaId: secretaria.id, userId: usuario.id, nombreTitular: usuario.nombre },
+      });
+    }
   }
   console.log(`Usuarios de titulares sembrados (inactivos, pendientes de correo real): ${creados}`);
 }
@@ -308,6 +350,7 @@ async function main() {
   await seedSecretarias();
   await seedSuperadmin();
   await seedTitulares();
+  await limpiarDescripcionTitularLegado();
   await seedInsignias();
   await seedMetasYDemo();
 }

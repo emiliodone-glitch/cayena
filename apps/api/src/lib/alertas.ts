@@ -4,6 +4,12 @@ import { enviarPushAUsuario } from "./push";
 
 const DIAS_SIN_AVANCE = 14;
 const DIAS_ANTI_SPAM = 7;
+// Umbral de inactividad a nivel de secretaría completa (más laxo que el de
+// una meta puntual: una secretaría entera se considera "dormida" con más
+// margen que un solo indicador estancado).
+const DIAS_INACTIVIDAD_SECRETARIA = 30;
+// Día del mes a partir del cual se exige el informe del mes anterior.
+const DIA_LIMITE_INFORME = 10;
 
 async function yaAlertadoRecientemente(titulo: string): Promise<boolean> {
   const desde = new Date(Date.now() - DIAS_ANTI_SPAM * 24 * 3600 * 1000);
@@ -156,7 +162,86 @@ export async function verificarEstancamientoMetas() {
     }
   }
 
+  alertasGeneradas += await verificarInformesPendientes();
+  alertasGeneradas += await verificarSecretariasInactivas();
+
   return alertasGeneradas;
+}
+
+function periodoAnterior(): string {
+  const ahora = new Date();
+  const mesAnterior = new Date(ahora.getFullYear(), ahora.getMonth() - 1, 1);
+  return `${mesAnterior.getFullYear()}-${String(mesAnterior.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// Rendición de cuentas (RF nuevo): pasado el día DIA_LIMITE_INFORME del mes,
+// si el informe de gestión del mes anterior no se subió, se alerta al
+// titular — el mismo mecanismo de "estancado" pero aplicado a la obligación
+// de reportar, no a un indicador numérico.
+async function verificarInformesPendientes(): Promise<number> {
+  if (new Date().getDate() < DIA_LIMITE_INFORME) return 0;
+  const periodo = periodoAnterior();
+  let generadas = 0;
+
+  const secretarias = await prisma.secretaria.findMany({
+    where: { titularId: { not: null } },
+    select: { id: true, nombre: true, titularId: true },
+  });
+  for (const s of secretarias) {
+    const informe = await prisma.informeSecretaria.findUnique({
+      where: { secretariaId_periodo: { secretariaId: s.id, periodo } },
+    });
+    if (informe) continue;
+    const titular = await prisma.user.findUnique({ where: { id: s.titularId! } });
+    if (!titular?.active) continue;
+    await crearAlerta(
+      `Informe pendiente: ${s.nombre}`,
+      `La secretaría de ${s.nombre} todavía no ha subido su informe de gestión de ${periodo}.`,
+      titular.id,
+    );
+    generadas++;
+  }
+  return generadas;
+}
+
+// Secretaría "dormida": sin actividades, gastos, documentos, avances de POA
+// ni informes en los últimos DIAS_INACTIVIDAD_SECRETARIA días. Distinto del
+// chequeo de "POA estancado" de arriba (que es sobre UNA meta puntual): esto
+// detecta cuando TODA la secretaría dejó de moverse en la práctica.
+async function verificarSecretariasInactivas(): Promise<number> {
+  const limite = new Date(Date.now() - DIAS_INACTIVIDAD_SECRETARIA * 24 * 3600 * 1000);
+  let generadas = 0;
+
+  const secretarias = await prisma.secretaria.findMany({
+    select: { id: true, nombre: true, titularId: true, createdAt: true },
+  });
+  for (const s of secretarias) {
+    const [ultimaActividad, ultimoGasto, ultimoDocumento, ultimoAvance, ultimoInforme] = await Promise.all([
+      prisma.actividad.findFirst({ where: { secretariaId: s.id }, orderBy: { createdAt: "desc" } }),
+      prisma.gasto.findFirst({ where: { secretariaId: s.id }, orderBy: { createdAt: "desc" } }),
+      prisma.documentoSecretaria.findFirst({ where: { secretariaId: s.id }, orderBy: { createdAt: "desc" } }),
+      prisma.avancePOA.findFirst({ where: { metaPoa: { secretariaId: s.id } }, orderBy: { fecha: "desc" } }),
+      prisma.informeSecretaria.findFirst({ where: { secretariaId: s.id }, orderBy: { createdAt: "desc" } }),
+    ]);
+    const fechas = [ultimaActividad?.createdAt, ultimoGasto?.createdAt, ultimoDocumento?.createdAt, ultimoAvance?.fecha, ultimoInforme?.createdAt].filter(
+      (f): f is Date => !!f,
+    );
+    const masReciente = fechas.length > 0 ? new Date(Math.max(...fechas.map((f) => f.getTime()))) : null;
+    // Una secretaría recién creada, sin tiempo aún de generar nada, no se
+    // alerta todavía — mismo margen que cualquier demarcación nueva.
+    if (!masReciente && s.createdAt > limite) continue;
+    if (masReciente && masReciente >= limite) continue;
+
+    const titular = s.titularId ? await prisma.user.findUnique({ where: { id: s.titularId } }) : null;
+    if (!titular?.active) continue;
+    await crearAlerta(
+      `Secretaría sin actividad: ${s.nombre}`,
+      `La secretaría de ${s.nombre} no registra actividades, gastos, documentos ni avances en los últimos ${DIAS_INACTIVIDAD_SECRETARIA} días.`,
+      titular.id,
+    );
+    generadas++;
+  }
+  return generadas;
 }
 
 export function iniciarVerificacionPeriodica() {

@@ -17,6 +17,7 @@ type Usuario = {
   active: boolean;
   secretariaId: string | null;
   secretaria: { nombre: string } | null;
+  cargoSecretaria: string | null;
   provinciaId: string | null;
   provincia: { nombre: string } | null;
   municipioId: string | null;
@@ -39,6 +40,7 @@ const FORM_VACIO = {
   telefono: "",
   role: "PROMOTOR",
   secretariaId: "",
+  cargoSecretaria: "",
   nivelTerritorio: "nacional" as NivelTerritorio,
   territorioProvinciaId: "",
   territorioMunicipioId: "",
@@ -144,6 +146,7 @@ export default function UsuariosPage() {
       telefono: u.telefono ?? "",
       role: u.role,
       secretariaId: u.secretariaId ?? "",
+      cargoSecretaria: u.cargoSecretaria ?? "",
       nivelTerritorio,
       territorioProvinciaId:
         u.provinciaId ?? u.municipio?.provinciaId ?? u.distritoMunicipal?.municipio.provinciaId ?? "",
@@ -168,6 +171,7 @@ export default function UsuariosPage() {
           body: JSON.stringify({
             ...resto,
             secretariaId: resto.secretariaId || null,
+            cargoSecretaria: resto.secretariaId ? resto.cargoSecretaria || null : null,
             ...territorio,
             ...(password ? { password } : {}),
           }),
@@ -176,7 +180,12 @@ export default function UsuariosPage() {
       } else {
         await apiFetch("/usuarios", {
           method: "POST",
-          body: JSON.stringify({ ...campos, secretariaId: campos.secretariaId || undefined, ...territorio }),
+          body: JSON.stringify({
+            ...campos,
+            secretariaId: campos.secretariaId || undefined,
+            cargoSecretaria: campos.secretariaId ? campos.cargoSecretaria || undefined : undefined,
+            ...territorio,
+          }),
         });
         toast("Usuario creado");
       }
@@ -249,7 +258,10 @@ export default function UsuariosPage() {
                   <td className="px-4 py-2">{u.nombre}</td>
                   <td className="px-4 py-2">{u.email}</td>
                   <td className="px-4 py-2">{u.role}</td>
-                  <td className="px-4 py-2">{u.secretaria?.nombre ?? "—"}</td>
+                  <td className="px-4 py-2">
+                    {u.secretaria?.nombre ?? "—"}
+                    {u.cargoSecretaria && <span className="ml-1.5 text-xs text-gray-400">({u.cargoSecretaria})</span>}
+                  </td>
                   <td className="px-4 py-2">
                     {nombreTerritorio(u) === "Nacional" ? (
                       <span className="text-gray-400">Nacional</span>
@@ -357,6 +369,21 @@ export default function UsuariosPage() {
               </select>
             </label>
           </div>
+
+          {form.secretariaId && (
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-gray-700">
+                Cargo en la secretaría
+                <span className="ml-1 font-normal text-gray-400">(ej. Vocal, Coordinador provincial…)</span>
+              </span>
+              <input
+                value={form.cargoSecretaria}
+                onChange={(e) => setForm({ ...form, cargoSecretaria: e.target.value })}
+                placeholder="Vocal"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+            </label>
+          )}
 
           <div className="rounded-lg border border-gray-200 p-3">
             <span className="mb-2 block text-sm font-medium text-gray-700">
