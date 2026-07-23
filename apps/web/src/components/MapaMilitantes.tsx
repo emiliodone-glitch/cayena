@@ -64,6 +64,8 @@ type ResumenDemarcacion = {
   meta: number;
   porcentaje: number;
   estado: EstadoAvance;
+  electores?: number | null;
+  penetracion?: number | null;
 };
 
 const COLOR_SIN_DATO = "#d1d5db";
@@ -216,7 +218,7 @@ function puntoMasInterior(anillo: number[][]): [number, number] {
 // punto más "adentro" de esa forma (ver puntoMasInterior), no solo su
 // centro de masa — importante porque varias provincias tienen penínsulas
 // finas donde el centro de masa cae en agua o en la parte angosta.
-function centroideMayorAnillo(f: Feature): [number, number] | null {
+function mayorAnillo(f: Feature): number[][] | null {
   const anillos = anillosDe(f);
   if (anillos.length === 0) return null;
   let mejor = anillos[0];
@@ -228,7 +230,13 @@ function centroideMayorAnillo(f: Feature): [number, number] | null {
       mejorArea = area;
     }
   }
-  const [lng, lat] = puntoMasInterior(mejor);
+  return mejor;
+}
+
+function centroideMayorAnillo(f: Feature): [number, number] | null {
+  const anillo = mayorAnillo(f);
+  if (!anillo) return null;
+  const [lng, lat] = puntoMasInterior(anillo);
   return [lat, lng];
 }
 
@@ -514,22 +522,44 @@ export function MapaMilitantes({
       // Las demarcaciones más grandes "ganan" el espacio cuando dos rótulos compiten.
       candidatos.sort((a, b) => b.area - a.area);
       const colocados: { x1: number; y1: number; x2: number; y2: number }[] = [];
-      const MARGEN = 3;
+      const MARGEN = 1;
+      // Antes de descartar un rótulo por choque, se prueba a desplazarlo
+      // verticalmente unos pocos pasos (arriba y abajo del ancla original) —
+      // dos provincias vecinas chocan sobre todo cuando ambos rótulos caen a
+      // la misma altura, y un pequeño corrimiento vertical suele bastar para
+      // que quepan los dos sin perder ninguno. Cada desplazamiento se valida
+      // contra el propio polígono (dentroDelAnillo) para no dejar el nombre
+      // flotando sobre un vecino o el mar.
+      const DESPLAZAMIENTOS = [0, -18, 18, -34, 34];
 
       for (const c of candidatos) {
-        const rect = { x1: c.cx - c.ancho / 2, y1: c.cy - c.alto / 2, x2: c.cx + c.ancho / 2, y2: c.cy + c.alto / 2 };
-        const chocaConAlguno = colocados.some(
-          (r) =>
-            rect.x1 - MARGEN < r.x2 && rect.x2 + MARGEN > r.x1 && rect.y1 - MARGEN < r.y2 && rect.y2 + MARGEN > r.y1,
-        );
-        if (chocaConAlguno) {
-          c.path.closeTooltip();
-        } else {
+        const feature = (c.path as unknown as { feature?: Feature }).feature;
+        const anillo = feature ? mayorAnillo(feature) : null;
+        let colocado = false;
+        for (const dy of DESPLAZAMIENTOS) {
+          const cy = c.cy + dy;
+          const rect = { x1: c.cx - c.ancho / 2, y1: cy - c.alto / 2, x2: c.cx + c.ancho / 2, y2: cy + c.alto / 2 };
+          const chocaConAlguno = colocados.some(
+            (r) =>
+              rect.x1 - MARGEN < r.x2 && rect.x2 + MARGEN > r.x1 && rect.y1 - MARGEN < r.y2 && rect.y2 + MARGEN > r.y1,
+          );
+          if (chocaConAlguno) continue;
+          let ancla = c.ancla;
+          if (dy !== 0) {
+            const latlng = map.containerPointToLatLng([c.cx, cy]);
+            if (anillo && !dentroDelAnillo(latlng.lng, latlng.lat, anillo)) continue;
+            ancla = latlng;
+          }
           colocados.push(rect);
           // Pasar el ancla explícitamente es obligatorio: openTooltip() sin
           // argumento recalcula la posición desde el centro ingenuo de
           // Leaflet, pisando la corrección de centroideMayorAnillo.
-          c.path.openTooltip(c.ancla);
+          c.path.openTooltip(ancla);
+          colocado = true;
+          break;
+        }
+        if (!colocado) {
+          c.path.closeTooltip();
         }
       }
       for (const path of descartados) path.closeTooltip();
@@ -634,13 +664,6 @@ export function MapaMilitantes({
       setProvinciaSeleccionada({ id: props.id, nombre: props.nombre });
       setNivel("municipios");
     } else if (nivel === "municipios") {
-      // En modo "% Electorado" no hay datos de electores JCE a nivel de
-      // distrito municipal (el padrón solo llega hasta municipio) — bajar un
-      // nivel más solo mostraría polígonos grises sin comparación posible, y
-      // además perdería de vista la comparación del municipio que sí tenía
-      // datos. Por eso en este modo el clic solo selecciona el municipio
-      // (el panel ya quedó fijado arriba) sin cambiar de nivel.
-      if (modoColorRef.current === "electorado") return;
       setMunicipioSeleccionado({ id: props.id, nombre: props.nombre });
       setNivel("distritos");
     }
@@ -714,8 +737,21 @@ export function MapaMilitantes({
   function volverAMunicipios() {
     setNivel("municipios");
     setMunicipioSeleccionado(null);
-    setPanel(null);
-    onDemarcacionChange?.(null);
+    // Al volver desde un distrito a la vista de municipios, re-cargar el
+    // resumen de la provincia (incluye electores JCE) en vez de limpiar el
+    // panel — antes se perdía la comparación que ya se había visto al
+    // entrar a esa provincia, y solo volvía a aparecer si se pasaba el
+    // mouse de nuevo sobre un municipio puntual.
+    if (provinciaSeleccionada) {
+      const { id, nombre } = provinciaSeleccionada;
+      onDemarcacionChange?.({ tipo: "provincia", id, nombre });
+      apiFetch<ResumenDemarcacion>(`/geo/provincias/${id}`)
+        .then((r) => setPanel(r as Propiedades))
+        .catch(() => setPanel(null));
+    } else {
+      setPanel(null);
+      onDemarcacionChange?.(null);
+    }
   }
 
   // Salto directo desde el buscador (o el ranking): navega al nivel correcto

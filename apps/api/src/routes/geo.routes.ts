@@ -463,6 +463,19 @@ geoRouter.get(
   }),
 );
 
+// Cálculo de electores/penetración compartido con propsDemarcacion, para que
+// el panel muestre el mismo dato tanto si la demarcación se selecciona en el
+// mapa (listas /geo/provincias, /geo/provincias/:id/municipios, etc., que sí
+// pasaban por propsDemarcacion) como si se llega por el buscador o al volver
+// de un nivel más profundo (estos resúmenes puntuales, que antes se armaban
+// a mano sin electores/penetracion y por eso la comparación desaparecía).
+function electoresYPenetracion(captados: number, electores: number | null | undefined) {
+  return {
+    electores: electores ?? null,
+    penetracion: electores && electores > 0 ? Math.round((captados / electores) * 1000) / 10 : null,
+  };
+}
+
 // GET /geo/provincias/:provinciaId — resumen para el panel fijo (RF-13.3)
 geoRouter.get(
   "/provincias/:provinciaId",
@@ -482,6 +495,7 @@ geoRouter.get(
       meta,
       porcentaje: calcularPorcentaje(captados, meta),
       estado: calcularEstadoAvance(captados, meta),
+      ...electoresYPenetracion(captados, provincia.electores),
     });
   }),
 );
@@ -505,6 +519,7 @@ geoRouter.get(
       meta,
       porcentaje: calcularPorcentaje(captados, meta),
       estado: calcularEstadoAvance(captados, meta),
+      ...electoresYPenetracion(captados, municipio.electores),
     });
   }),
 );
@@ -527,6 +542,7 @@ geoRouter.get(
       meta,
       porcentaje: calcularPorcentaje(captados, meta),
       estado: calcularEstadoAvance(captados, meta),
+      ...electoresYPenetracion(captados, distrito.electores),
     });
   }),
 );
