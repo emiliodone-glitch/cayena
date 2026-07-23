@@ -935,11 +935,12 @@ export function MapaMilitantes({
     }));
   }, [puntos]);
 
-  // Exporta el mapa actual como imagen PNG dibujando los polígonos en un
-  // canvas propio a partir del geojson (independiente de Leaflet y de los
-  // tiles externos, así no hay problemas de CORS ni dependencias).
-  function exportarPNG() {
-    if (!geo) return;
+  // Dibuja el mapa actual (polígonos + título + leyenda) en un canvas propio
+  // a partir del geojson, independiente de Leaflet y de los tiles externos
+  // (así no hay problemas de CORS ni dependencias) — lo reutilizan tanto la
+  // exportación a PNG como la del reporte PDF.
+  function construirCanvasMapa(): HTMLCanvasElement | null {
+    if (!geo) return null;
     const W = 1400;
     const H = 1000;
     const M = 40;
@@ -947,7 +948,7 @@ export function MapaMilitantes({
     canvas.width = W;
     canvas.height = H;
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) return null;
 
     ctx.fillStyle = "#f0fdf4";
     ctx.fillRect(0, 0, W, H);
@@ -1037,14 +1038,99 @@ export function MapaMilitantes({
       lx += ctx.measureText(texto).width + 56;
     }
 
+    return canvas;
+  }
+
+  function nombreArchivoMapa(): string {
+    return nivel === "nacional" ? "nacional" : nivel === "municipios" ? (provinciaSeleccionada?.id ?? "mapa") : (municipioSeleccionado?.id ?? "mapa");
+  }
+
+  function exportarPNG() {
+    const canvas = construirCanvasMapa();
+    if (!canvas) return;
     canvas.toBlob((blob) => {
       if (!blob) return;
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = `mapa-${nivel === "nacional" ? "nacional" : nivel === "municipios" ? provinciaSeleccionada?.id : municipioSeleccionado?.id}.png`;
+      a.download = `mapa-${nombreArchivoMapa()}.png`;
       a.click();
       URL.revokeObjectURL(a.href);
     }, "image/png");
+  }
+
+  // Reporte PDF (mapa + tabla de métricas): reutiliza el mismo canvas del
+  // PNG como imagen de portada y agrega abajo una tabla con los números de
+  // cada demarcación visible en el nivel actual — el PNG solo es la imagen,
+  // esto sirve para presentar/imprimir con los datos concretos al lado.
+  async function exportarPDF() {
+    const canvas = construirCanvasMapa();
+    if (!canvas || !geo) return;
+    const { jsPDF } = await import("jspdf");
+    const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+
+    const imgW = pageW - 40;
+    const imgH = (imgW * canvas.height) / canvas.width;
+    doc.addImage(canvas.toDataURL("image/png"), "PNG", 20, 20, imgW, Math.min(imgH, pageH - 40));
+
+    doc.addPage();
+    doc.setFontSize(14);
+    doc.setTextColor(20, 83, 45);
+    const titulo =
+      nivel === "nacional"
+        ? "República Dominicana — militantes por provincia"
+        : nivel === "municipios"
+          ? `Municipios de ${provinciaSeleccionada?.nombre}`
+          : `Distritos municipales de ${municipioSeleccionado?.nombre}`;
+    doc.text(titulo, 20, 30);
+    doc.setFontSize(9);
+    doc.setTextColor(107, 114, 128);
+    doc.text(
+      `Cayena · ${new Date().toLocaleDateString("es-DO", { day: "numeric", month: "long", year: "numeric" })}`,
+      20,
+      44,
+    );
+
+    const filas = geo.features
+      .map((f) => f.properties as Propiedades)
+      .sort((a, b) => b.porcentaje - a.porcentaje);
+
+    const colX = { nombre: 20, captados: 320, meta: 420, avance: 520, electores: 620, estado: 740 };
+    let y = 70;
+    doc.setFontSize(9);
+    doc.setTextColor(156, 163, 175);
+    doc.text("DEMARCACIÓN", colX.nombre, y);
+    doc.text("CAPTADOS", colX.captados, y);
+    doc.text("META", colX.meta, y);
+    doc.text("AVANCE", colX.avance, y);
+    doc.text("ELECTORES JCE", colX.electores, y);
+    doc.text("ESTADO", colX.estado, y);
+    y += 6;
+    doc.setDrawColor(229, 231, 235);
+    doc.line(20, y, pageW - 20, y);
+    y += 16;
+
+    doc.setFontSize(10);
+    for (const p of filas) {
+      if (y > pageH - 30) {
+        doc.addPage();
+        y = 40;
+      }
+      doc.setTextColor(31, 41, 55);
+      doc.text(p.nombre, colX.nombre, y);
+      doc.text(p.militantesCaptados.toLocaleString("es-DO"), colX.captados, y);
+      doc.text(p.meta.toLocaleString("es-DO"), colX.meta, y);
+      doc.text(`${p.porcentaje}%`, colX.avance, y);
+      doc.text(p.electores != null ? p.electores.toLocaleString("es-DO") : "—", colX.electores, y);
+      const colorEstado =
+        p.estado === "verde" ? [22, 163, 74] : p.estado === "amarillo" ? [217, 119, 6] : [220, 38, 38];
+      doc.setTextColor(colorEstado[0], colorEstado[1], colorEstado[2]);
+      doc.text(p.estado === "verde" ? "Meta cumplida" : p.estado === "amarillo" ? "En curso" : "Lejos de meta", colX.estado, y);
+      y += 18;
+    }
+
+    doc.save(`reporte-mapa-${nombreArchivoMapa()}.pdf`);
   }
 
   const tendencia =
@@ -1219,6 +1305,13 @@ export function MapaMilitantes({
               title="Descargar el mapa actual como imagen PNG"
             >
               ⤓ PNG
+            </button>
+            <button
+              onClick={exportarPDF}
+              className="rounded-lg border border-institucional-600 px-2.5 py-1 text-xs font-medium text-institucional-700 hover:bg-institucional-50"
+              title="Descargar un reporte PDF con el mapa y la tabla de métricas de cada demarcación"
+            >
+              ⤓ PDF
             </button>
           </div>
         </div>
