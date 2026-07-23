@@ -10,6 +10,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { TableSkeleton } from "@/components/Skeleton";
 import { ObraForm, type ObraExistente } from "@/components/forms/ObraForm";
 import { generarTarjetaObra, descargarBlob } from "@/lib/tarjetaObra";
+import { CATEGORIAS_OBRA, formatearCategoriaObra, ANIOS_OBRA_GOBIERNO } from "@/lib/obrasGobierno";
 
 type Obra = ObraExistente & {
   provincia: { nombre: string };
@@ -19,13 +20,7 @@ type Obra = ObraExistente & {
 
 type Lista = { id: string; nombre: string }[];
 
-const CATEGORIAS = ["EDUCACION", "SALUD", "VIALIDAD", "VIVIENDA", "DEPORTE", "AGUA_SANEAMIENTO", "ELECTRICIDAD", "SEGURIDAD", "OTRA"];
-
 const fmtMoney = new Intl.NumberFormat("es-DO", { style: "currency", currency: "DOP", maximumFractionDigits: 0 });
-
-// Últimos años + el actual, para no obligar a escribir un número a mano.
-const ANIO_ACTUAL = new Date().getFullYear();
-const ANIOS = Array.from({ length: 8 }, (_, i) => ANIO_ACTUAL - i);
 
 export default function ObrasPage() {
   const { user } = useAuth();
@@ -114,7 +109,7 @@ export default function ObrasPage() {
   return (
     <div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-bold text-institucional-900">Obras de gobierno</h1>
+        <h1 className="text-xl font-bold text-institucional-900">Obras de gobiernos Leonel Fernández</h1>
         <div className="flex items-center gap-3">
           <input
             value={q}
@@ -140,8 +135,8 @@ export default function ObrasPage() {
           className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-institucional-600 focus:outline-none"
         >
           <option value="">Todas las categorías</option>
-          {CATEGORIAS.map((c) => (
-            <option key={c} value={c}>{c.toLowerCase().replace("_", " ")}</option>
+          {CATEGORIAS_OBRA.map((c) => (
+            <option key={c} value={c}>{formatearCategoriaObra(c)}</option>
           ))}
         </select>
         <select
@@ -160,7 +155,7 @@ export default function ObrasPage() {
           className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-institucional-600 focus:outline-none"
         >
           <option value="">Todos los años</option>
-          {ANIOS.map((a) => (
+          {ANIOS_OBRA_GOBIERNO.map((a) => (
             <option key={a} value={a}>{a}</option>
           ))}
         </select>
@@ -198,7 +193,7 @@ export default function ObrasPage() {
               {obrasVisibles.map((o) => (
                 <tr key={o.id}>
                   <td className="px-4 py-2 font-medium">{o.titulo}</td>
-                  <td className="px-4 py-2 capitalize">{o.categoria.toLowerCase().replace("_", " ")}</td>
+                  <td className="px-4 py-2">{formatearCategoriaObra(o.categoria)}</td>
                   <td className="px-4 py-2">
                     {o.provincia.nombre} / {o.municipio.nombre}
                     <a

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { API_URL, resolveFileUrl } from "@/lib/api";
+import { CATEGORIAS_OBRA, formatearCategoriaObra, ANIOS_OBRA_GOBIERNO } from "@/lib/obrasGobierno";
 
 type Resumen = {
   militantesTotales: number;
@@ -31,9 +32,6 @@ type ObraPublica = {
   municipio: { nombre: string };
 };
 
-const CATEGORIAS = ["EDUCACION", "SALUD", "VIALIDAD", "VIVIENDA", "DEPORTE", "AGUA_SANEAMIENTO", "ELECTRICIDAD", "SEGURIDAD", "OTRA"];
-const ANIO_ACTUAL = new Date().getFullYear();
-const ANIOS = Array.from({ length: 8 }, (_, i) => ANIO_ACTUAL - i);
 
 type ProvinciaResumen = {
   id: string;
@@ -133,7 +131,7 @@ export default function TransparenciaPage() {
           <div className="mb-4 space-y-2">
             {resumen?.obrasPorCategoria.map((o) => (
               <div key={o.categoria} className="flex items-center justify-between text-sm">
-                <span className="capitalize text-gray-600">{o.categoria.toLowerCase().replace("_", " ")}</span>
+                <span className="text-gray-600">{formatearCategoriaObra(o.categoria)}</span>
                 <span className="font-semibold text-institucional-900">{o.total}</span>
               </div>
             ))}
@@ -150,8 +148,8 @@ export default function TransparenciaPage() {
               className="rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-institucional-600 focus:outline-none"
             >
               <option value="">Todas las categorías</option>
-              {CATEGORIAS.map((c) => (
-                <option key={c} value={c}>{c.toLowerCase().replace("_", " ")}</option>
+              {CATEGORIAS_OBRA.map((c) => (
+                <option key={c} value={c}>{formatearCategoriaObra(c)}</option>
               ))}
             </select>
             <select
@@ -170,7 +168,7 @@ export default function TransparenciaPage() {
               className="rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-institucional-600 focus:outline-none"
             >
               <option value="">Todos los años</option>
-              {ANIOS.map((a) => (
+              {ANIOS_OBRA_GOBIERNO.map((a) => (
                 <option key={a} value={a}>{a}</option>
               ))}
             </select>
@@ -187,7 +185,7 @@ export default function TransparenciaPage() {
                 )}
                 <div className="p-3">
                   <span className="text-xs font-semibold uppercase text-institucional-600">
-                    {o.categoria.toLowerCase().replace("_", " ")}
+                    {formatearCategoriaObra(o.categoria)}
                   </span>
                   <div className="font-semibold text-institucional-900">{o.titulo}</div>
                   <p className="mt-1 line-clamp-2 text-xs text-gray-500">{o.resena}</p>

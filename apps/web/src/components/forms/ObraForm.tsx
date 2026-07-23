@@ -5,20 +5,9 @@ import { apiFetch, ApiError } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import { FotoUploader } from "@/components/FotoUploader";
 import { UbicacionInput } from "@/components/UbicacionInput";
+import { CATEGORIAS_OBRA, formatearCategoriaObra } from "@/lib/obrasGobierno";
 
 type Lista = { id: string; nombre: string }[];
-
-const CATEGORIAS = [
-  "EDUCACION",
-  "SALUD",
-  "VIALIDAD",
-  "VIVIENDA",
-  "DEPORTE",
-  "AGUA_SANEAMIENTO",
-  "ELECTRICIDAD",
-  "SEGURIDAD",
-  "OTRA",
-];
 
 export type ObraExistente = {
   id: string;
@@ -127,8 +116,8 @@ export function ObraForm({
       <label className="block">
         <span className="mb-1 block text-sm font-medium text-gray-700">Categoría</span>
         <select className="input" value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
-          {CATEGORIAS.map((c) => (
-            <option key={c} value={c}>{c.toLowerCase().replace("_", " ")}</option>
+          {CATEGORIAS_OBRA.map((c) => (
+            <option key={c} value={c}>{formatearCategoriaObra(c)}</option>
           ))}
         </select>
       </label>
