@@ -2,12 +2,67 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
-import { Pencil, Plus } from "lucide-react";
+import {
+  Pencil,
+  Plus,
+  Building2,
+  Network,
+  Megaphone,
+  Rocket,
+  Monitor,
+  PartyPopper,
+  Car,
+  ClipboardCheck,
+  Vote,
+  Wallet,
+  Radio,
+  Scale,
+  Briefcase,
+  HardHat,
+  Flower,
+  Handshake,
+  Users,
+  Baby,
+  GraduationCap,
+  Church,
+  Dumbbell,
+  type LucideIcon,
+} from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/components/Toast";
 import { Drawer } from "@/components/Drawer";
 import { CardSkeleton } from "@/components/Skeleton";
+
+// Ícono + color por palabra clave del nombre — genérico y consistente,
+// sin necesitar logos reales por secretaría.
+const ICONOS_SECRETARIA: { match: RegExp; icon: LucideIcon; color: string }[] = [
+  { match: /organizaci/i, icon: Network, color: "bg-indigo-50 text-indigo-600" },
+  { match: /propaganda/i, icon: Megaphone, color: "bg-rose-50 text-rose-600" },
+  { match: /juventud/i, icon: Rocket, color: "bg-sky-50 text-sky-600" },
+  { match: /inform[aá]tica/i, icon: Monitor, color: "bg-slate-100 text-slate-600" },
+  { match: /gesti[oó]n operativa|eventos/i, icon: PartyPopper, color: "bg-fuchsia-50 text-fuchsia-600" },
+  { match: /movilidad|transporte/i, icon: Car, color: "bg-cyan-50 text-cyan-600" },
+  { match: /fiscalizaci[oó]n|evaluaci[oó]n|control/i, icon: ClipboardCheck, color: "bg-amber-50 text-amber-600" },
+  { match: /electoral/i, icon: Vote, color: "bg-violet-50 text-violet-600" },
+  { match: /finanzas/i, icon: Wallet, color: "bg-emerald-50 text-emerald-600" },
+  { match: /comunicaci[oó]n/i, icon: Radio, color: "bg-orange-50 text-orange-600" },
+  { match: /[ée]tica|transparencia|rendici[oó]n/i, icon: Scale, color: "bg-teal-50 text-teal-600" },
+  { match: /profesionales|gremiales/i, icon: Briefcase, color: "bg-blue-50 text-blue-600" },
+  { match: /laborales/i, icon: HardHat, color: "bg-yellow-50 text-yellow-700" },
+  { match: /mujer/i, icon: Flower, color: "bg-pink-50 text-pink-600" },
+  { match: /partidos pol[ií]ticos|sociedad civil/i, icon: Handshake, color: "bg-lime-50 text-lime-700" },
+  { match: /comunitari/i, icon: Users, color: "bg-green-50 text-green-600" },
+  { match: /ni[ñn]os|adolescentes/i, icon: Baby, color: "bg-purple-50 text-purple-600" },
+  { match: /formaci[oó]n pol[ií]tica/i, icon: GraduationCap, color: "bg-institucional-50 text-institucional-700" },
+  { match: /cultos/i, icon: Church, color: "bg-stone-100 text-stone-600" },
+  { match: /deportes/i, icon: Dumbbell, color: "bg-red-50 text-red-600" },
+];
+const ICONO_DEFECTO = { icon: Building2, color: "bg-gray-100 text-gray-500" };
+
+function iconoSecretaria(nombre: string) {
+  return ICONOS_SECRETARIA.find((i) => i.match.test(nombre)) ?? ICONO_DEFECTO;
+}
 
 type Titular = { id: string; nombre: string; email: string; active: boolean };
 type Secretaria = {
@@ -113,7 +168,9 @@ export default function SecretariasPage() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {secretarias === null &&
           Array.from({ length: 6 }).map((_, i) => <CardSkeleton key={i} />)}
-        {secretarias?.map((s) => (
+        {secretarias?.map((s) => {
+          const { icon: Icono, color } = iconoSecretaria(s.nombre);
+          return (
           <Link
             key={s.id}
             href={`/secretarias/${s.id}`}
@@ -131,7 +188,12 @@ export default function SecretariasPage() {
                 <Pencil className="h-4 w-4" />
               </button>
             )}
-            <div className="font-semibold text-institucional-900">{s.nombre}</div>
+            <div className="flex items-center gap-3">
+              <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${color}`}>
+                <Icono className="h-5 w-5" />
+              </div>
+              <div className="font-semibold text-institucional-900">{s.nombre}</div>
+            </div>
             <div className="mt-1 text-sm">
               {s.titular ? (
                 <span className={s.titular.active ? "text-gray-700" : "text-amber-600"}>
@@ -150,7 +212,8 @@ export default function SecretariasPage() {
             )}
             <div className="mt-3 text-xs font-medium text-institucional-600">Ver gestión completa →</div>
           </Link>
-        ))}
+          );
+        })}
       </div>
 
       <Drawer open={drawerAbierto} onClose={() => setDrawerAbierto(false)} title={editando ? "Editar secretaría" : "Nueva secretaría"}>
