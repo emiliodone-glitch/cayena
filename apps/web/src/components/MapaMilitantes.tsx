@@ -256,7 +256,7 @@ function buscarMejorEnCuadricula(
   return { punto: mejor, dist: mejorDist };
 }
 
-function puntoMasInterior(anillo: number[][]): [number, number] {
+function buscarPoloDeInaccesibilidad(anillo: number[][]): { punto: [number, number] | null; dist: number } {
   let minX = Infinity,
     maxX = -Infinity,
     minY = Infinity,
@@ -269,11 +269,7 @@ function puntoMasInterior(anillo: number[][]): [number, number] {
   }
   // Primera pasada: cuadrícula gruesa sobre toda la forma (rápida).
   const gruesa = buscarMejorEnCuadricula(anillo, minX, maxX, minY, maxY, 28);
-  if (!gruesa.punto) {
-    // Respaldo si la cuadrícula no cayó ningún punto adentro (forma muy
-    // fina): el centroide de área, aunque no sea perfecto, sigue siendo razonable.
-    return centroideAnillo(anillo);
-  }
+  if (!gruesa.punto) return gruesa;
   // Segunda pasada: cuadrícula fina alrededor del mejor punto de la
   // primera, acotada a una celda gruesa de radio — mucho más preciso que
   // solo agrandar la cuadrícula gruesa entera (que sería O(n²) mucho más
@@ -290,7 +286,16 @@ function puntoMasInterior(anillo: number[][]): [number, number] {
     gy + radioY,
     20,
   );
-  const mejorPunto = fina.punto && fina.dist >= gruesa.dist ? fina : gruesa;
+  return fina.punto && fina.dist >= gruesa.dist ? fina : gruesa;
+}
+
+function puntoMasInterior(anillo: number[][]): [number, number] {
+  const polo = buscarPoloDeInaccesibilidad(anillo);
+  if (!polo.punto) {
+    // Respaldo si la cuadrícula no cayó ningún punto adentro (forma muy
+    // fina): el centroide de área, aunque no sea perfecto, sigue siendo razonable.
+    return centroideAnillo(anillo);
+  }
   // El punto más "adentro" del polígono resuelve bien las provincias
   // angostas/cóncavas (evita que el nombre caiga en el mar o en una
   // península fina), pero para la mayoría de las provincias, de forma
@@ -306,9 +311,74 @@ function puntoMasInterior(anillo: number[][]): [number, number] {
   const centroide = centroideAnillo(anillo);
   if (dentroDelAnillo(centroide[0], centroide[1], anillo)) {
     const centroideDist = distanciaAlBorde(centroide[0], centroide[1], anillo);
-    if (centroideDist >= mejorPunto.dist * 0.55) return centroide;
+    if (centroideDist >= polo.dist * 0.55) return centroide;
   }
-  return mejorPunto.punto ?? centroide;
+  return polo.punto ?? centroide;
+}
+
+// Búsqueda en cuadrícula del punto, dentro del polígono, más cercano a un
+// objetivo dado (el centroide) que aun así mantenga una distancia mínima al
+// borde — un punto "sesgado hacia el centroide pero seguro", intermedio
+// entre el centroide puro y el polo de inaccesibilidad.
+function puntoSesgadoHaciaCentroide(
+  anillo: number[][],
+  objetivo: [number, number],
+  distMinima: number,
+  cotas: { minX: number; maxX: number; minY: number; maxY: number },
+  pasos: number,
+): [number, number] | null {
+  let mejor: [number, number] | null = null;
+  let mejorDist = Infinity;
+  for (let i = 0; i <= pasos; i++) {
+    const x = cotas.minX + ((cotas.maxX - cotas.minX) * i) / pasos;
+    for (let j = 0; j <= pasos; j++) {
+      const y = cotas.minY + ((cotas.maxY - cotas.minY) * j) / pasos;
+      if (!dentroDelAnillo(x, y, anillo)) continue;
+      if (distanciaAlBorde(x, y, anillo) < distMinima) continue;
+      const d = Math.hypot(x - objetivo[0], y - objetivo[1]);
+      if (d < mejorDist) {
+        mejorDist = d;
+        mejor = [x, y];
+      }
+    }
+  }
+  return mejor;
+}
+
+// Ajustes puntuales por nombre de demarcación — casos donde la regla general
+// de puntoMasInterior no da el resultado deseado a la vista, pero corregir la
+// regla general movería el ancla de TODAS las demás demarcaciones. Se
+// mantiene esta lista corta y explícita a propósito, para no repetir ese
+// efecto colateral.
+function anclaAjustadaPorNombre(nombre: string | undefined, anillo: number[][]): [number, number] | null {
+  if (nombre === "San Cristóbal") {
+    // Con la preferencia general por el centroide (ver puntoMasInterior),
+    // San Cristóbal pasaba a un punto más ancho horizontalmente y su nombre
+    // dejaba de partirse en 2 líneas — a pedido, se mantiene fija en el polo
+    // de inaccesibilidad (el comportamiento previo a esa preferencia).
+    const polo = buscarPoloDeInaccesibilidad(anillo);
+    return polo.punto;
+  }
+  if (nombre === "Elías Piña") {
+    // Acá el centroide cae casi sobre el borde (territorio angosto) y el
+    // polo de inaccesibilidad, aunque seguro, se ve corrido hacia una
+    // esquina. Se busca un punto intermedio: lo más cerca posible del
+    // centroide sin perder una distancia mínima al borde (60% de la del
+    // polo), en vez de un extremo u otro.
+    const polo = buscarPoloDeInaccesibilidad(anillo);
+    if (!polo.punto) return null;
+    const centroide = centroideAnillo(anillo);
+    const margen = 0.02;
+    const cotas = {
+      minX: Math.min(centroide[0], polo.punto[0]) - margen,
+      maxX: Math.max(centroide[0], polo.punto[0]) + margen,
+      minY: Math.min(centroide[1], polo.punto[1]) - margen,
+      maxY: Math.max(centroide[1], polo.punto[1]) + margen,
+    };
+    const intermedio = puntoSesgadoHaciaCentroide(anillo, centroide, polo.dist * 0.6, cotas, 60);
+    return intermedio ?? polo.punto;
+  }
+  return null;
 }
 
 // Leaflet centra el tooltip "direction: center" con el centroide de TODOS
@@ -338,7 +408,9 @@ function mayorAnillo(f: Feature): number[][] | null {
 function centroideMayorAnillo(f: Feature): [number, number] | null {
   const anillo = mayorAnillo(f);
   if (!anillo) return null;
-  const [lng, lat] = puntoMasInterior(anillo);
+  const nombre = (f.properties as Propiedades | undefined)?.nombre;
+  const ajustado = anclaAjustadaPorNombre(nombre, anillo);
+  const [lng, lat] = ajustado ?? puntoMasInterior(anillo);
   return [lat, lng];
 }
 
