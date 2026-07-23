@@ -493,14 +493,21 @@ export function MapaMilitantes({
         const p2 = map.latLngToContainerPoint(b.getSouthEast());
         const ancho = Math.abs(p2.x - p1.x);
         const altoPx = Math.abs(p2.y - p1.y);
-        if (ancho < 52 || altoPx < 22) {
-          descartados.push(path);
-          return;
-        }
         const tooltip = path.getTooltip();
         const texto = tooltip?.getContent();
         const nombreFeature = (path.feature?.properties as Propiedades | undefined)?.nombre ?? "";
         const anchoTexto = medirTexto(typeof texto === "string" ? texto : nombreFeature);
+        // El umbral de descarte usa el MENOR entre un mínimo parejo (52px) y
+        // el ancho real que pide el texto: para nombres largos el mínimo
+        // parejo sigue mandando (mismo comportamiento de siempre), pero una
+        // etiqueta corta como "DN" solo necesita que su territorio alcance
+        // para "DN", no para el mínimo pensado para nombres largos — por
+        // eso antes Distrito Nacional se descartaba pese a que su
+        // abreviatura sí entraba en su territorio.
+        if (ancho < Math.min(52, anchoTexto + 12) || altoPx < 18) {
+          descartados.push(path);
+          return;
+        }
         // El ancla real de la etiqueta (el punto más "adentro" del territorio
         // principal, ver centroideMayorAnillo) puede quedar lejos del centro
         // del bounding box en provincias con islas o penínsulas finas — hay
@@ -673,7 +680,12 @@ export function MapaMilitantes({
     const props = feature.properties as Propiedades;
     // Etiqueta permanente con el nombre — cuál se muestra u oculta lo decide
     // actualizarEtiquetas() según el tamaño en píxeles de cada polígono.
-    layer.bindTooltip(props.nombre, {
+    // Distrito Nacional es, por lejos, el territorio más chico del mapa
+    // (queda envuelto por Santo Domingo): su nombre completo nunca cabe, así
+    // que en el mapa se abrevia "DN" — el resto de la app sigue mostrando el
+    // nombre completo (panel, buscador, breadcrumb, etc.).
+    const textoEtiqueta = props.nombre === "Distrito Nacional" ? "DN" : props.nombre;
+    layer.bindTooltip(textoEtiqueta, {
       permanent: true,
       direction: "center",
       className: "etiqueta-mapa",

@@ -345,20 +345,30 @@ geoRouter.get(
       }),
     );
 
-    const [stats, metas] = await Promise.all([
+    const [stats, metas, municipio] = await Promise.all([
       statsPorCampo("distritoMunicipalId", filtros, { municipioId }),
       metasActivasPorDistritoMunicipal(),
+      prisma.municipio.findUnique({ where: { id: municipioId }, select: { electores: true } }),
     ]);
 
     const features = resueltos.map(({ feature, distrito }) => {
       if (!distrito) {
-        // cabecera: militantes del municipio sin distrito municipal asignado
+        // cabecera: militantes del municipio sin distrito municipal asignado.
+        // No tiene electorado propio, pero mostrar la comparación en null
+        // hacía que, al volver a seleccionar esta zona (que en el mapa se ve
+        // y se llama igual que el municipio), la comparación de electores
+        // JCE pareciera desaparecer — se usa el total del municipio para el
+        // dato de contexto, sin calcular un % de captación con él (esa
+        // captación es solo la porción sin distrito, no la del municipio
+        // completo, así que un porcentaje ahí sería engañoso).
         return {
           ...feature,
           properties: {
             ...feature.properties,
             id: null,
             ...propsDemarcacion(null, 0, null, stats),
+            electores: municipio?.electores ?? null,
+            penetracion: null,
           },
         };
       }
