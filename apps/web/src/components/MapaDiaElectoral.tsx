@@ -4,9 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { MapContainer, GeoJSON } from "react-leaflet";
 import type { Map as LeafletMap } from "leaflet";
 import * as L from "leaflet";
-import type { Feature, FeatureCollection, Polygon, MultiPolygon } from "geojson";
+import type { Feature, FeatureCollection } from "geojson";
 import { apiFetch, API_URL, getAccessToken } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { partirEnLineas, anillosDe, anchoHorizontalEnPunto, mayorAnillo, centroideMayorAnillo } from "@/lib/mapaEtiquetas";
 
 type Propiedades = {
   id: string | null;
@@ -44,12 +45,6 @@ function colorParticipacion(p: number | null | undefined): string {
   return "#d6f5dd";
 }
 
-function anillosDe(f: Feature): number[][][] {
-  const g = f.geometry as Polygon | MultiPolygon;
-  if (g.type === "Polygon") return g.coordinates as number[][][];
-  return (g.coordinates as number[][][][]).flat();
-}
-
 function construirRuta(
   nivel: "nacional" | "municipios" | "distritos",
   provinciaId: string | undefined,
@@ -84,6 +79,11 @@ export function MapaDiaElectoral({
 
   const mapRef = useRef<LeafletMap | null>(null);
   const geoLayerRef = useRef<L.GeoJSON | null>(null);
+  // Mapa de elemento DOM -> layer de Leaflet, reconstruido cada vez que se
+  // (re)monta la capa GeoJSON — usado por el hit-testing manual de
+  // `mousemove` más abajo (ver por qué en ese efecto).
+  const elementLayerRef = useRef(new Map<Element, L.Path>());
+  const resaltadoRef = useRef<L.Path | null>(null);
 
   const autoNavegoRef = useRef(false);
   useEffect(() => {
@@ -181,13 +181,30 @@ export function MapaDiaElectoral({
     const props = feature.properties as Propiedades;
     const textoEtiqueta = props.nombre === "Distrito Nacional" ? "DN" : props.nombre;
     layer.bindTooltip(textoEtiqueta, { permanent: true, direction: "center", className: "etiqueta-mapa", opacity: 1 });
+    // Leaflet centra el tooltip con el centroide de TODOS los anillos de la
+    // geometría (islas incluidas) — para una provincia con un cayo separado
+    // del territorio principal (Pedernales, La Altagracia) eso deja el
+    // nombre flotando sobre la isla o en el mar entre ambas. Se recalcula acá
+    // con el punto más "adentro" del anillo de mayor área (ver
+    // centroideMayorAnillo en @/lib/mapaEtiquetas, misma lógica que ya usa el
+    // mapa de militantes). El ancla se guarda en el propio layer porque
+    // actualizarEtiquetas() (más abajo) vuelve a abrir el tooltip en cada
+    // encuadre y openTooltip() sin argumento recalcula desde el centro
+    // ingenuo de Leaflet, pisando esta corrección.
+    const centro = centroideMayorAnillo(feature);
+    if (centro) {
+      layer.getTooltip()?.setLatLng(centro);
+      (layer as L.Path & { anclaEtiqueta?: L.LatLngExpression }).anclaEtiqueta = centro;
+    }
+    // El hover (mouseover/mouseout por-path de Leaflet) no se maneja acá —
+    // ver el efecto de mousemove más abajo — porque es susceptible al "hover
+    // fantasma" que dispara el navegador cuando el contenido bajo un cursor
+    // quieto cambia sin que el mouse se haya movido de verdad (p. ej. justo
+    // al hacer clic, o al volver atrás por el breadcrumb): eso podía dejar el
+    // panel mostrando una demarcación distinta a la que el cursor señalaba
+    // de verdad. El clic, en cambio, siempre es una acción real y deliberada
+    // (requiere mousedown+mouseup), así que se queda con su propio listener.
     layer.on({
-      mouseover: (e) => {
-        (e.target as L.Path).setStyle({ weight: 3, color: "#123f1c" });
-        setPanel(props);
-        avisarDemarcacion(props);
-      },
-      mouseout: (e) => (e.target as L.Path).setStyle({ weight: 1, color: "#94a3b8" }),
       click: () => {
         setPanel(props);
         avisarDemarcacion(props);
@@ -213,6 +230,40 @@ export function MapaDiaElectoral({
 
   useEffect(() => {
     if (!geo) return;
+
+    // Reparte el nombre de cada demarcación en varias líneas cortas cuando
+    // no cabe en una sola (p. ej. "María Trinidad Sánchez" en 3 renglones)
+    // en vez de desbordar el territorio — mismo criterio que el mapa de
+    // militantes, pero sin su anti-colisión entre etiquetas vecinas (acá no
+    // hace falta: este mapa no tiene tantas demarcaciones chicas y pegadas
+    // compitiendo por espacio).
+    function actualizarEtiquetas() {
+      const map = mapRef.current;
+      const layer = geoLayerRef.current;
+      if (!map || !layer) return;
+      layer.eachLayer((l) => {
+        const path = l as L.Path & { feature?: Feature; anclaEtiqueta?: L.LatLngExpression };
+        const tooltip = path.getTooltip?.();
+        if (!tooltip || !path.feature) return;
+        const nombre = (path.feature.properties as Propiedades).nombre;
+        const nombreEtiqueta = nombre === "Distrito Nacional" ? "DN" : nombre;
+        const ancla = L.latLng(path.anclaEtiqueta ?? tooltip.getLatLng()!);
+        const anilloPrincipal = mayorAnillo(path.feature);
+        let maxLineaPx = 90;
+        if (anilloPrincipal) {
+          const disponibleGrados = anchoHorizontalEnPunto(anilloPrincipal, ancla.lng, ancla.lat);
+          if (Number.isFinite(disponibleGrados)) {
+            const bordeIzq = map.latLngToContainerPoint([ancla.lat, ancla.lng - disponibleGrados / 2]);
+            const bordeDer = map.latLngToContainerPoint([ancla.lat, ancla.lng + disponibleGrados / 2]);
+            maxLineaPx = Math.max(30, Math.abs(bordeDer.x - bordeIzq.x) * 0.9);
+          }
+        }
+        const lineas = partirEnLineas(nombreEtiqueta, maxLineaPx);
+        path.setTooltipContent(lineas.join("<br>"));
+        path.openTooltip(ancla);
+      });
+    }
+
     const raf = requestAnimationFrame(() => {
       const map = mapRef.current;
       const layer = geoLayerRef.current;
@@ -221,9 +272,55 @@ export function MapaDiaElectoral({
       if (!bounds.isValid()) return;
       map.invalidateSize();
       map.fitBounds(bounds, { padding: [4, 4], animate: false });
+      actualizarEtiquetas();
     });
-    return () => cancelAnimationFrame(raf);
+    window.addEventListener("resize", actualizarEtiquetas);
+
+    // Reconstruye el mapa elemento-DOM -> layer para el hit-testing manual de
+    // más abajo (los <path> son nuevos cada vez que cambia `geo`).
+    elementLayerRef.current = new Map();
+    geoLayerRef.current?.eachLayer((layer) => {
+      const path = layer as L.Path;
+      const el = path.getElement?.();
+      if (el) elementLayerRef.current.set(el, path);
+    });
+    resaltadoRef.current = null;
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", actualizarEtiquetas);
+    };
   }, [geo]);
+
+  // Detecta la demarcación bajo el cursor a partir de mousemove reales
+  // (nunca sintéticos) en vez de los eventos mouseover/mouseout por-path de
+  // Leaflet: el navegador dispara un mouseover "fantasma" sobre lo que sea
+  // que quede bajo un cursor quieto en cuanto el contenido de abajo cambia
+  // sin que el mouse se haya movido de verdad — típicamente justo al hacer
+  // clic (mismo mecanismo que usa el mapa de militantes para el mismo
+  // problema). Un `mousemove` real, en cambio, solo ocurre cuando el cursor
+  // se mueve de verdad, así que basar todo en él elimina esa clase de bug.
+  useEffect(() => {
+    function onMouseMove(e: MouseEvent) {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const layer = el ? elementLayerRef.current.get(el) : undefined;
+      const anterior = resaltadoRef.current;
+      if (layer === anterior) return;
+      if (anterior) anterior.setStyle({ weight: 1, color: "#94a3b8" });
+      if (layer) {
+        layer.setStyle({ weight: 3, color: "#123f1c" });
+        const props = (layer as unknown as { feature?: Feature }).feature?.properties as Propiedades | undefined;
+        if (props) {
+          setPanel(props);
+          avisarDemarcacion(props);
+        }
+      }
+      resaltadoRef.current = layer ?? null;
+    }
+    window.addEventListener("mousemove", onMouseMove);
+    return () => window.removeEventListener("mousemove", onMouseMove);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nivel, municipioSeleccionado?.id]);
 
   async function exportarPNG() {
     if (!geo) return;
