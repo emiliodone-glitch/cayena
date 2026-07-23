@@ -184,6 +184,31 @@ function distanciaAlBorde(x: number, y: number, anillo: number[][]): number {
 // de eso, se busca por cuadrícula el punto que está DENTRO del anillo y más
 // alejado de cualquier borde (una versión simple de "polo de inaccesibilidad"),
 // que es donde de verdad cabe cómodamente el nombre de la demarcación.
+function buscarMejorEnCuadricula(
+  anillo: number[][],
+  minX: number,
+  maxX: number,
+  minY: number,
+  maxY: number,
+  pasos: number,
+): { punto: [number, number] | null; dist: number } {
+  let mejor: [number, number] | null = null;
+  let mejorDist = -Infinity;
+  for (let i = 0; i <= pasos; i++) {
+    const x = minX + ((maxX - minX) * i) / pasos;
+    for (let j = 0; j <= pasos; j++) {
+      const y = minY + ((maxY - minY) * j) / pasos;
+      if (!dentroDelAnillo(x, y, anillo)) continue;
+      const d = distanciaAlBorde(x, y, anillo);
+      if (d > mejorDist) {
+        mejorDist = d;
+        mejor = [x, y];
+      }
+    }
+  }
+  return { punto: mejor, dist: mejorDist };
+}
+
 function puntoMasInterior(anillo: number[][]): [number, number] {
   let minX = Infinity,
     maxX = -Infinity,
@@ -195,24 +220,30 @@ function puntoMasInterior(anillo: number[][]): [number, number] {
     if (y < minY) minY = y;
     if (y > maxY) maxY = y;
   }
-  const PASOS = 28;
-  let mejor: [number, number] | null = null;
-  let mejorDist = -Infinity;
-  for (let i = 0; i <= PASOS; i++) {
-    const x = minX + ((maxX - minX) * i) / PASOS;
-    for (let j = 0; j <= PASOS; j++) {
-      const y = minY + ((maxY - minY) * j) / PASOS;
-      if (!dentroDelAnillo(x, y, anillo)) continue;
-      const d = distanciaAlBorde(x, y, anillo);
-      if (d > mejorDist) {
-        mejorDist = d;
-        mejor = [x, y];
-      }
-    }
+  // Primera pasada: cuadrícula gruesa sobre toda la forma (rápida).
+  const gruesa = buscarMejorEnCuadricula(anillo, minX, maxX, minY, maxY, 28);
+  if (!gruesa.punto) {
+    // Respaldo si la cuadrícula no cayó ningún punto adentro (forma muy
+    // fina): el centroide de área, aunque no sea perfecto, sigue siendo razonable.
+    return centroideAnillo(anillo);
   }
-  // Respaldo si la cuadrícula no cayó ningún punto adentro (forma muy fina):
-  // el centroide de área, aunque no sea perfecto, sigue siendo razonable.
-  return mejor ?? centroideAnillo(anillo);
+  // Segunda pasada: cuadrícula fina alrededor del mejor punto de la
+  // primera, acotada a una celda gruesa de radio — mucho más preciso que
+  // solo agrandar la cuadrícula gruesa entera (que sería O(n²) mucho más
+  // caro) y es lo que hacía que el nombre quedara ligeramente descentrado
+  // o pegado a un borde en provincias con formas angostas/irregulares.
+  const [gx, gy] = gruesa.punto;
+  const radioX = (maxX - minX) / 28;
+  const radioY = (maxY - minY) / 28;
+  const fina = buscarMejorEnCuadricula(
+    anillo,
+    gx - radioX,
+    gx + radioX,
+    gy - radioY,
+    gy + radioY,
+    20,
+  );
+  return fina.punto && fina.dist >= gruesa.dist ? fina.punto : gruesa.punto;
 }
 
 // Leaflet centra el tooltip "direction: center" con el centroide de TODOS
