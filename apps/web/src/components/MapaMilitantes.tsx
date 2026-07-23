@@ -1063,8 +1063,15 @@ export function MapaMilitantes({
       return;
     }
     const params = new URLSearchParams({ dias: "14" });
+    // Ojo con nivel === "distritos": normalmente el panel ahí es una
+    // demarcación de distrito real, pero el buscador puede saltar
+    // directo a un MUNICIPIO (deja nivel en "distritos" para mostrar su
+    // desglose) sin que el usuario haya tocado un distrito todavía — en
+    // ese caso panel.id es el id del municipio, igual a
+    // municipioSeleccionado.id, no el de un distrito.
+    const panelEsElPropioMunicipio = nivel === "distritos" && panel.id === municipioSeleccionado?.id;
     if (nivel === "nacional") params.set("provinciaId", panel.id);
-    else if (nivel === "municipios") params.set("municipioId", panel.id);
+    else if (nivel === "municipios" || panelEsElPropioMunicipio) params.set("municipioId", panel.id);
     else if (panel.id) params.set("distritoMunicipalId", panel.id);
     else if (municipioSeleccionado) {
       params.set("municipioId", municipioSeleccionado.id);
@@ -1077,6 +1084,19 @@ export function MapaMilitantes({
       .then(setSerieDiaria)
       .catch(() => setSerieDiaria(null));
   }, [panel?.id, panel?.nombre, nivel, municipioSeleccionado?.id, refreshToken, refreshVivo]);
+
+  // Proyección de cumplimiento de meta (mismo cálculo que el Dashboard,
+  // pero por demarcación): ritmo mensual estimado a partir del propio
+  // sparkline de 14 días, ya cargado para el panel — no hace falta otro
+  // fetch. null = sin ritmo con el que proyectar (0 registros recientes).
+  const proyeccionMeses = useMemo(() => {
+    if (!panel || !serieDiaria) return null;
+    const faltantes = panel.meta - panel.militantesCaptados;
+    if (faltantes <= 0) return 0;
+    const dias = serieDiaria.length || 14;
+    const ritmoMensual = (serieDiaria.reduce((s, d) => s + d.total, 0) / dias) * 30;
+    return ritmoMensual > 0 ? Math.round((faltantes / ritmoMensual) * 10) / 10 : null;
+  }, [panel?.meta, panel?.militantesCaptados, serieDiaria]);
 
   return (
     <div>
@@ -1382,6 +1402,11 @@ export function MapaMilitantes({
                 <div className="text-base font-semibold" style={{ color: COLOR_ESTADO[panel.estado] }}>
                   {panel.porcentaje}%
                 </div>
+                {proyeccionMeses !== null && (
+                  <div className="mt-0.5 text-[11px] text-gray-400">
+                    {proyeccionMeses === 0 ? "¡Meta ya cumplida!" : `~${proyeccionMeses} meses al ritmo actual`}
+                  </div>
+                )}
               </div>
             </div>
             {(panel.captadosFiltrados !== undefined || panel.electores != null) && (
