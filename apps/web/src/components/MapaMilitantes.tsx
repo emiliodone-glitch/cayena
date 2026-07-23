@@ -102,6 +102,30 @@ function medirTexto(texto: string): number {
   return contextoMedicion?.measureText(texto).width ?? texto.length * 7;
 }
 
+// Reparte un nombre en varias líneas cortas cuando no cabe en una sola —
+// igual que en los mapas ilustrados de referencia, donde "María Trinidad
+// Sánchez" se ve en 3 renglones centrados en vez de desbordar el territorio.
+// Greedy: va sumando palabras a la línea actual mientras quepan en el ancho
+// disponible; si una sola palabra ya excede ese ancho, se deja igual (no se
+// parte a la mitad de una palabra).
+function partirEnLineas(texto: string, anchoMaxPx: number): string[] {
+  const palabras = texto.split(" ").filter(Boolean);
+  if (palabras.length === 0) return [texto];
+  const lineas: string[] = [];
+  let actual = palabras[0];
+  for (let i = 1; i < palabras.length; i++) {
+    const candidata = `${actual} ${palabras[i]}`;
+    if (medirTexto(candidata) <= anchoMaxPx) {
+      actual = candidata;
+    } else {
+      lineas.push(actual);
+      actual = palabras[i];
+    }
+  }
+  lineas.push(actual);
+  return lineas;
+}
+
 // Aplana Polygon/MultiPolygon a su lista de anillos (coordenadas [lng, lat]).
 function anillosDe(f: Feature): number[][][] {
   const g = f.geometry as Polygon | MultiPolygon;
@@ -176,6 +200,29 @@ function distanciaAlBorde(x: number, y: number, anillo: number[][]): number {
     if (d < min) min = d;
   }
   return min;
+}
+
+// Ancho real del territorio, medido en línea recta horizontal a la altura Y
+// del punto dado (ray casting: se buscan los dos cruces del anillo que
+// encierran a X). Se usa para decidir cuántas palabras entran por renglón al
+// partir el nombre en varias líneas — a diferencia de distanciaAlBorde (que
+// mide la distancia más corta al borde en cualquier dirección), esto mide
+// específicamente el ancho horizontal disponible, que es lo que importa para
+// texto en una sola línea.
+function anchoHorizontalEnPunto(anillo: number[][], x: number, y: number): number {
+  const cruces: number[] = [];
+  for (let i = 0, j = anillo.length - 2; i < anillo.length - 1; j = i++) {
+    const [xi, yi] = anillo[i];
+    const [xj, yj] = anillo[j];
+    if (yi > y !== yj > y) {
+      cruces.push(((xj - xi) * (y - yi)) / (yj - yi) + xi);
+    }
+  }
+  cruces.sort((a, b) => a - b);
+  for (let i = 0; i < cruces.length - 1; i++) {
+    if (x >= cruces[i] && x <= cruces[i + 1]) return cruces[i + 1] - cruces[i];
+  }
+  return Infinity;
 }
 
 // El centroide de área de un anillo puede caer fuera del territorio (o en
@@ -736,27 +783,50 @@ export function MapaMilitantes({
         const p2 = map.latLngToContainerPoint(b.getSouthEast());
         const ancho = Math.abs(p2.x - p1.x);
         const altoPx = Math.abs(p2.y - p1.y);
-        const tooltip = path.getTooltip();
-        const texto = tooltip?.getContent();
-        const nombreFeature = (path.feature?.properties as Propiedades | undefined)?.nombre ?? "";
-        const anchoTexto = medirTexto(typeof texto === "string" ? texto : nombreFeature);
-        // El umbral de descarte usa el MENOR entre un mínimo parejo (52px) y
-        // el ancho real que pide el texto: para nombres largos el mínimo
-        // parejo sigue mandando (mismo comportamiento de siempre), pero una
-        // etiqueta corta como "DN" solo necesita que su territorio alcance
-        // para "DN", no para el mínimo pensado para nombres largos — por
-        // eso antes Distrito Nacional se descartaba pese a que su
-        // abreviatura sí entraba en su territorio.
-        if (ancho < Math.min(52, anchoTexto + 12) || altoPx < 18) {
-          descartados.push(path);
-          return;
-        }
+        const propiedades = path.feature?.properties as Propiedades | undefined;
+        const nombreFeature = propiedades?.nombre ?? "";
+        // El nombre se toma siempre de la propiedad del feature (nunca del
+        // contenido actual del tooltip): como acá se reescribe el tooltip con
+        // <br> entre renglones, leerlo de vuelta en la siguiente pasada
+        // devolvería el HTML ya partido y rompería el cálculo de líneas.
+        const nombreEtiqueta = nombreFeature === "Distrito Nacional" ? "DN" : nombreFeature;
         // El ancla real de la etiqueta (el punto más "adentro" del territorio
         // principal, ver centroideMayorAnillo) puede quedar lejos del centro
         // del bounding box en provincias con islas o penínsulas finas — hay
-        // que medir la colisión en el punto donde el rótulo realmente se
-        // dibuja, no en el centro del bbox.
-        const ancla = path.anclaEtiqueta ?? b.getCenter();
+        // que medir tanto la colisión como el ancho disponible en el punto
+        // donde el rótulo realmente se dibuja, no en el centro del bbox.
+        const ancla = L.latLng(path.anclaEtiqueta ?? b.getCenter());
+        const anilloPrincipal = path.feature ? mayorAnillo(path.feature) : null;
+        // Igual que en los mapas de referencia, un nombre largo en un
+        // territorio angosto se reparte en varias líneas cortas en vez de
+        // desbordar la división — el ancho máximo por renglón es el ancho
+        // horizontal real del territorio en la latitud del ancla (no el
+        // ancho del bounding box completo, que puede ser mucho mayor que el
+        // punto donde realmente cae el nombre).
+        let maxLineaPx = ancho * 0.92;
+        if (anilloPrincipal) {
+          const disponibleGrados = anchoHorizontalEnPunto(anilloPrincipal, ancla.lng, ancla.lat);
+          if (Number.isFinite(disponibleGrados)) {
+            const bordeIzq = map.latLngToContainerPoint([ancla.lat, ancla.lng - disponibleGrados / 2]);
+            const bordeDer = map.latLngToContainerPoint([ancla.lat, ancla.lng + disponibleGrados / 2]);
+            maxLineaPx = Math.max(30, Math.abs(bordeDer.x - bordeIzq.x) * 0.9);
+          }
+        }
+        const lineas = partirEnLineas(nombreEtiqueta, maxLineaPx);
+        const anchoTexto = Math.max(...lineas.map((l) => medirTexto(l)));
+        const altoTexto = 14 + (lineas.length - 1) * 13;
+        // El umbral de descarte usa el MENOR entre un mínimo parejo (52px) y
+        // el ancho real que pide el renglón más largo: para nombres largos el
+        // mínimo parejo sigue mandando (mismo comportamiento de siempre), pero
+        // una etiqueta corta como "DN" solo necesita que su territorio
+        // alcance para "DN", no para el mínimo pensado para nombres largos —
+        // por eso antes Distrito Nacional se descartaba pese a que su
+        // abreviatura sí entraba en su territorio.
+        if (ancho < Math.min(52, anchoTexto + 12) || altoPx < altoTexto + 2) {
+          descartados.push(path);
+          return;
+        }
+        path.setTooltipContent(lineas.join("<br>"));
         const anclaPx = map.latLngToContainerPoint(ancla);
         candidatos.push({
           path,
@@ -765,7 +835,7 @@ export function MapaMilitantes({
           cx: anclaPx.x,
           cy: anclaPx.y,
           ancho: anchoTexto + 8,
-          alto: 16,
+          alto: altoTexto,
         });
       });
 
