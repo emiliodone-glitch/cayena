@@ -290,7 +290,25 @@ function puntoMasInterior(anillo: number[][]): [number, number] {
     gy + radioY,
     20,
   );
-  return fina.punto && fina.dist >= gruesa.dist ? fina.punto : gruesa.punto;
+  const mejorPunto = fina.punto && fina.dist >= gruesa.dist ? fina : gruesa;
+  // El punto más "adentro" del polígono resuelve bien las provincias
+  // angostas/cóncavas (evita que el nombre caiga en el mar o en una
+  // península fina), pero para la mayoría de las provincias, de forma
+  // razonablemente convexa, termina bastante más descentrado a la vista
+  // que el simple centroide de área — un desplazamiento hacia una esquina
+  // que se nota más cuanto más chico es el territorio (Santiago Rodríguez,
+  // Santo Domingo, Hermanas Mirabal). Por eso se prefiere el centroide
+  // siempre que quede adentro del polígono Y esté casi tan lejos del borde
+  // como el punto de cuadrícula (≥55% de esa distancia): ahí el centroide
+  // es una posición igual de segura pero se ve mejor centrado. Si el
+  // centroide cae afuera o muy pegado a un borde (provincias realmente
+  // angostas, p. ej. San Pedro de Macorís), se usa el punto de cuadrícula.
+  const centroide = centroideAnillo(anillo);
+  if (dentroDelAnillo(centroide[0], centroide[1], anillo)) {
+    const centroideDist = distanciaAlBorde(centroide[0], centroide[1], anillo);
+    if (centroideDist >= mejorPunto.dist * 0.55) return centroide;
+  }
+  return mejorPunto.punto ?? centroide;
 }
 
 // Leaflet centra el tooltip "direction: center" con el centroide de TODOS
