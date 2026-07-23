@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Image, Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { apiFetch, API_URL } from "@/api/client";
@@ -9,12 +9,25 @@ function resolveUrl(url: string) {
   return url.startsWith("http") ? url : `${API_URL}${url}`;
 }
 
+function abrirComoLlegar(lat: number, lng: number, etiqueta: string) {
+  const url = Platform.select({
+    ios: `maps:0,0?q=${etiqueta}@${lat},${lng}`,
+    android: `geo:0,0?q=${lat},${lng}(${etiqueta})`,
+    default: `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`,
+  });
+  Linking.openURL(url!).catch(() => {
+    Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`);
+  });
+}
+
 type Actividad = {
   id: string;
   titulo: string;
   descripcion: string | null;
   fecha: string;
   ubicacion: string | null;
+  lat: number | null;
+  lng: number | null;
   fotos: string[];
   confirmados: number;
   secretaria: { nombre: string };
@@ -88,6 +101,11 @@ export default function DetalleActividadScreen() {
           })}
         </Text>
         {actividad.ubicacion && <Text style={styles.meta}>📍 {actividad.ubicacion}</Text>}
+        {actividad.lat != null && actividad.lng != null && (
+          <TouchableOpacity onPress={() => abrirComoLlegar(actividad.lat!, actividad.lng!, actividad.titulo)}>
+            <Text style={styles.comoLlegar}>Cómo llegar →</Text>
+          </TouchableOpacity>
+        )}
         <Text style={styles.confirmados}>{actividad.confirmados} personas confirmaron asistencia</Text>
 
         {militanteId ? (
@@ -128,6 +146,7 @@ const styles = StyleSheet.create({
   titulo: { fontSize: 22, fontWeight: "700", marginTop: 4, color: "#123f1c" },
   descripcion: { fontSize: 15, color: "#374151", marginTop: 12, lineHeight: 22 },
   meta: { fontSize: 13, color: "#6b7280", marginTop: 8 },
+  comoLlegar: { fontSize: 13, color: "#1f7a34", fontWeight: "700", marginTop: 6 },
   confirmados: { fontSize: 13, color: "#1f7a34", fontWeight: "600", marginTop: 12 },
   boton: { marginTop: 16, borderRadius: 12, paddingVertical: 14, alignItems: "center" },
   botonConfirmar: { backgroundColor: "#1f7a34" },

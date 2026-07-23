@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import { FotoUploader } from "@/components/FotoUploader";
+import { UbicacionInput } from "@/components/UbicacionInput";
 import { useAuth } from "@/lib/auth";
 
 type Secretaria = { id: string; nombre: string };
@@ -14,6 +15,8 @@ export type ActividadExistente = {
   descripcion: string | null;
   fecha: string;
   ubicacion: string | null;
+  lat: number | null;
+  lng: number | null;
   secretariaId: string;
   publicadaApp: boolean;
   fotos: string[];
@@ -53,6 +56,11 @@ export function ActividadForm({
     // de "nueva actividad" sin que el usuario lo decida explícitamente.
     publicadaApp: actividad?.publicadaApp ?? false,
   });
+  // Aparte, no dentro de `form`: al duplicar si se arrastran lat/lng junto al
+  // texto (la copia probablemente sea otro lugar hasta que el usuario lo
+  // reescriba o confirme).
+  const [lat, setLat] = useState<number | null>(actividad?.lat ?? null);
+  const [lng, setLng] = useState<number | null>(actividad?.lng ?? null);
   const [fotos, setFotos] = useState<string[]>(actividad?.fotos ?? []);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -66,7 +74,7 @@ export function ActividadForm({
     setError(null);
     setSubmitting(true);
     try {
-      const body = { ...form, fotos };
+      const body = { ...form, fotos, lat, lng };
       if (actividad) {
         await apiFetch(`/actividades/${actividad.id}`, { method: "PATCH", body: JSON.stringify(body) });
         toast("Actividad actualizada");
@@ -114,10 +122,15 @@ export function ActividadForm({
         </label>
         <label className="block">
           <span className="mb-1 block text-sm font-medium text-gray-700">Ubicación</span>
-          <input
-            className="input"
+          <UbicacionInput
             value={form.ubicacion}
-            onChange={(e) => setForm({ ...form, ubicacion: e.target.value })}
+            lat={lat}
+            lng={lng}
+            onChange={({ ubicacion, lat: nuevoLat, lng: nuevoLng }) => {
+              setForm({ ...form, ubicacion });
+              setLat(nuevoLat);
+              setLng(nuevoLng);
+            }}
           />
         </label>
       </div>

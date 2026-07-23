@@ -312,7 +312,19 @@ export default function ActividadesPage() {
                 <tr key={a.id}>
                   <td className="px-4 py-2 font-medium">{a.titulo}</td>
                   <td className="px-4 py-2">{new Date(a.fecha).toLocaleString("es-DO")}</td>
-                  <td className="px-4 py-2">{a.ubicacion ?? "—"}</td>
+                  <td className="px-4 py-2">
+                    {a.ubicacion ?? "—"}
+                    {a.lat != null && a.lng != null && (
+                      <a
+                        href={`https://www.google.com/maps/dir/?api=1&destination=${a.lat},${a.lng}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="ml-1.5 text-xs text-institucional-600 hover:underline"
+                      >
+                        Cómo llegar
+                      </a>
+                    )}
+                  </td>
                   <td className="px-4 py-2">{a.secretaria.nombre}</td>
                   <td className="px-4 py-2">
                     <button
