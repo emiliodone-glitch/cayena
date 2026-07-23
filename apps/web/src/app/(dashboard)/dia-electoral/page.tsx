@@ -3,10 +3,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { Vote, ScanLine, Download, CalendarPlus } from "lucide-react";
+import { Vote, ScanLine, Download, CalendarPlus, Plus } from "lucide-react";
 import { apiFetch, API_URL, getAccessToken, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/components/Toast";
+import { Drawer } from "@/components/Drawer";
 import type { DemarcacionElectoral } from "@/components/MapaDiaElectoral";
 
 const MapaDiaElectoral = dynamic(() => import("@/components/MapaDiaElectoral").then((m) => m.MapaDiaElectoral), {
@@ -34,33 +35,50 @@ export default function DiaElectoralPage() {
   const { user } = useAuth();
   const toast = useToast();
   const esSuperadmin = user?.role === "SUPERADMIN";
-  const [evento, setEvento] = useState<Evento | null | undefined>(undefined);
+  // Cada jornada creada queda guardada — este selector permite seguir
+  // monitoreando cualquier proceso anterior sin perderle acceso al crear uno
+  // nuevo (crear una jornada solo cambia cuál es la "activa" para marcar
+  // votos/autoreporte, no borra ni oculta las demás).
+  const [eventos, setEventos] = useState<Evento[] | null>(null);
+  const [eventoId, setEventoId] = useState<string | null>(null);
   const [resumen, setResumen] = useState<Resumen | null>(null);
   const [demarcacion, setDemarcacion] = useState<DemarcacionElectoral | null>(null);
   const [recintos, setRecintos] = useState<Recinto[] | null>(null);
   const [refreshTicker, setRefreshTicker] = useState(0);
+  const [drawerAbierto, setDrawerAbierto] = useState(false);
   const [nombreNuevo, setNombreNuevo] = useState("Elecciones Generales");
   const [fechaNueva, setFechaNueva] = useState("");
   const [creando, setCreando] = useState(false);
 
-  useEffect(() => {
-    apiFetch<Evento | null>("/dia-electoral/activo").then(setEvento);
-  }, []);
+  function cargarEventos(seleccionar?: string) {
+    apiFetch<Evento[]>("/dia-electoral/eventos").then((lista) => {
+      setEventos(lista);
+      if (seleccionar) {
+        setEventoId(seleccionar);
+      } else if (!eventoId && lista.length > 0) {
+        setEventoId(lista.find((e) => e.activo)?.id ?? lista[0].id);
+      }
+    });
+  }
+
+  useEffect(cargarEventos, []);
+
+  const evento = eventos?.find((e) => e.id === eventoId) ?? null;
 
   useEffect(() => {
-    if (!evento) return;
-    apiFetch<Resumen>(`/dia-electoral/resumen/${evento.id}`).then(setResumen);
-  }, [evento, refreshTicker]);
+    if (!eventoId) return;
+    apiFetch<Resumen>(`/dia-electoral/resumen/${eventoId}`).then(setResumen);
+  }, [eventoId, refreshTicker]);
 
   useEffect(() => {
-    if (demarcacion?.tipo !== "municipio" || !evento) {
+    if (demarcacion?.tipo !== "municipio" || !eventoId) {
       setRecintos(null);
       return;
     }
-    apiFetch<Recinto[]>(`/dia-electoral/mesas?municipioId=${demarcacion.id}&eventoId=${evento.id}`)
+    apiFetch<Recinto[]>(`/dia-electoral/mesas?municipioId=${demarcacion.id}&eventoId=${eventoId}`)
       .then(setRecintos)
       .catch(() => setRecintos([]));
-  }, [demarcacion, evento, refreshTicker]);
+  }, [demarcacion, eventoId, refreshTicker]);
 
   // Ticker nacional en vivo: mismo canal SSE que el mapa, evento "cambio-votos".
   useEffect(() => {
@@ -80,7 +98,10 @@ export default function DiaElectoralPage() {
         method: "POST",
         body: JSON.stringify({ nombre: nombreNuevo, fecha: fechaNueva }),
       });
-      setEvento(nuevo);
+      cargarEventos(nuevo.id);
+      setDrawerAbierto(false);
+      setNombreNuevo("Elecciones Generales");
+      setFechaNueva("");
       toast("Jornada electoral creada y activada");
     } catch (err) {
       toast(err instanceof ApiError ? err.message : "No se pudo crear la jornada", "error");
@@ -117,9 +138,29 @@ export default function DiaElectoralPage() {
     });
   }
 
-  if (evento === undefined) return null;
+  const formularioNuevaJornada = (
+    <form onSubmit={crearEvento} className="space-y-3">
+      <label className="block">
+        <span className="mb-1 block text-sm font-medium text-gray-700">Nombre</span>
+        <input required value={nombreNuevo} onChange={(e) => setNombreNuevo(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+      </label>
+      <label className="block">
+        <span className="mb-1 block text-sm font-medium text-gray-700">Fecha</span>
+        <input required type="date" value={fechaNueva} onChange={(e) => setFechaNueva(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+      </label>
+      <p className="text-xs text-gray-400">
+        Esta pasará a ser la jornada activa (la que usan el autoreporte y el marcado por mesa). Las jornadas anteriores
+        se conservan y se pueden seguir consultando desde el selector de arriba.
+      </p>
+      <button disabled={creando} className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60">
+        <CalendarPlus className="h-4 w-4" /> {creando ? "Creando…" : "Crear jornada electoral"}
+      </button>
+    </form>
+  );
 
-  if (!evento) {
+  if (eventos === null) return null;
+
+  if (eventos.length === 0) {
     return (
       <div className="mx-auto max-w-md">
         <div className="mb-6 flex items-center gap-2">
@@ -127,22 +168,12 @@ export default function DiaElectoralPage() {
           <h1 className="text-xl font-bold text-institucional-900">Día Electoral</h1>
         </div>
         {esSuperadmin ? (
-          <form onSubmit={crearEvento} className="space-y-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-            <p className="text-sm text-gray-500">No hay ninguna jornada electoral activa. Crea una para empezar a trackear la participación.</p>
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-gray-700">Nombre</span>
-              <input required value={nombreNuevo} onChange={(e) => setNombreNuevo(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-gray-700">Fecha</span>
-              <input required type="date" value={fechaNueva} onChange={(e) => setFechaNueva(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
-            </label>
-            <button disabled={creando} className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60">
-              <CalendarPlus className="h-4 w-4" /> {creando ? "Creando…" : "Crear jornada electoral"}
-            </button>
-          </form>
+          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+            <p className="mb-3 text-sm text-gray-500">No hay ninguna jornada electoral todavía. Crea una para empezar a trackear la participación.</p>
+            {formularioNuevaJornada}
+          </div>
         ) : (
-          <p className="text-sm text-gray-400">No hay ninguna jornada electoral activa todavía.</p>
+          <p className="text-sm text-gray-400">No hay ninguna jornada electoral registrada todavía.</p>
         )}
       </div>
     );
@@ -152,13 +183,30 @@ export default function DiaElectoralPage() {
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <Vote className="h-6 w-6 text-indigo-600" />
+          <Vote className="h-6 w-6 text-indigo-600 shrink-0" />
           <div>
-            <h1 className="text-xl font-bold text-institucional-900">{evento.nombre}</h1>
-            <p className="text-xs text-gray-400">{new Date(evento.fecha).toLocaleDateString("es-DO", { day: "numeric", month: "long", year: "numeric" })}</p>
+            <select
+              value={eventoId ?? ""}
+              onChange={(e) => setEventoId(e.target.value)}
+              className="rounded-lg border border-gray-200 bg-transparent px-1 py-1 text-xl font-bold text-institucional-900 focus:border-institucional-600 focus:outline-none"
+            >
+              {eventos.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.nombre} {e.activo ? "· activa" : ""}
+                </option>
+              ))}
+            </select>
+            {evento && (
+              <p className="text-xs text-gray-400">{new Date(evento.fecha).toLocaleDateString("es-DO", { day: "numeric", month: "long", year: "numeric" })}</p>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {esSuperadmin && (
+            <button onClick={() => setDrawerAbierto(true)} className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50">
+              <Plus className="h-4 w-4" /> Nueva jornada
+            </button>
+          )}
           <Link href="/dia-electoral/marcar" className="flex items-center gap-1.5 rounded-lg border border-indigo-200 px-4 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50">
             <ScanLine className="h-4 w-4" /> Registrar votos
           </Link>
@@ -177,7 +225,7 @@ export default function DiaElectoralPage() {
         </div>
       )}
 
-      <MapaDiaElectoral eventoId={evento.id} onDemarcacionChange={setDemarcacion} />
+      {eventoId && <MapaDiaElectoral eventoId={eventoId} onDemarcacionChange={setDemarcacion} />}
 
       {demarcacion?.tipo === "municipio" && recintos && (
         <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
@@ -204,6 +252,10 @@ export default function DiaElectoralPage() {
           )}
         </div>
       )}
+
+      <Drawer open={drawerAbierto} onClose={() => setDrawerAbierto(false)} title="Nueva jornada electoral">
+        {formularioNuevaJornada}
+      </Drawer>
     </div>
   );
 }

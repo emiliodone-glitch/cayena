@@ -25,19 +25,23 @@ export type DemarcacionElectoral =
   | { tipo: "municipio"; id: string; nombre: string }
   | { tipo: "distrito"; id: string; nombre: string };
 
-const COLOR_SIN_DATO = "#d1d5db";
+const COLOR_SIN_DATO = "#e2e8f0";
 
 // Escala azul-morada, deliberadamente distinta del semáforo rojo/amarillo/
 // verde que ya usa el mapa de militantes (para no confundir "avance de meta"
 // con "participación electoral") — de claro a oscuro según el porcentaje.
+// El 0% (el estado de casi todo el mapa apenas arranca la jornada) usa un
+// tono con tinte azul ya visible en vez de casi-blanco: si no, se fundía
+// tanto con "sin dato" como con el fondo del mapa y el contorno quedaba
+// como única pista de que ahí había una demarcación.
 function colorParticipacion(p: number | null | undefined): string {
   if (p == null) return COLOR_SIN_DATO;
   if (p >= 80) return "#312e81";
   if (p >= 60) return "#4338ca";
   if (p >= 40) return "#6366f1";
-  if (p >= 20) return "#a5b4fc";
-  if (p > 0) return "#e0e7ff";
-  return "#eef2ff";
+  if (p >= 20) return "#818cf8";
+  if (p > 0) return "#a5b4fc";
+  return "#c7d2fe";
 }
 
 function anillosDe(f: Feature): number[][][] {
@@ -144,7 +148,10 @@ export function MapaDiaElectoral({
   function estiloFeature(feature?: Feature) {
     const props = feature?.properties as Propiedades | undefined;
     const valor = modoColor === "padron" ? props?.porcentajePadron : props?.porcentajePropia;
-    return { fillColor: colorParticipacion(valor), fillOpacity: 0.78, color: "#ffffff", weight: 1.2 };
+    // Borde gris medio (no blanco): con 0% de participación en casi todo el
+    // mapa, el relleno queda casi tan pálido como el fondo — un borde blanco
+    // ahí desaparecía por completo y las demarcaciones se veían "pegadas".
+    return { fillColor: colorParticipacion(valor), fillOpacity: 0.85, color: "#94a3b8", weight: 1 };
   }
 
   useEffect(() => {
@@ -180,7 +187,7 @@ export function MapaDiaElectoral({
         setPanel(props);
         avisarDemarcacion(props);
       },
-      mouseout: (e) => (e.target as L.Path).setStyle({ weight: 1.2, color: "#ffffff" }),
+      mouseout: (e) => (e.target as L.Path).setStyle({ weight: 1, color: "#94a3b8" }),
       click: () => {
         setPanel(props);
         avisarDemarcacion(props);
@@ -295,7 +302,12 @@ export function MapaDiaElectoral({
           center={[18.7357, -70.1627]}
           zoom={8}
           zoomSnap={0.1}
-          style={{ height: "100%", width: "100%" }}
+          // El fondo compartido de .leaflet-container es un verde pálido
+          // pensado para el mapa de militantes — acá se pisa con un gris muy
+          // claro y neutro: con el mapa entero en 0% de participación, el
+          // relleno casi blanco terminaba fundiéndose con ese verde y las
+          // provincias se veían "sin contorno".
+          style={{ height: "100%", width: "100%", background: "#f1f5f9" }}
           zoomControl={false}
           attributionControl={false}
           dragging={false}

@@ -15,7 +15,8 @@ type Resultado = { ok: boolean; mensaje: string; nombre?: string };
 // en el back office web (no en la app móvil pública) por la misma razón que
 // el check-in de Actividades: la app pública no tiene sesión de staff.
 export default function MarcarVotoPage() {
-  const [evento, setEvento] = useState<Evento | null>(null);
+  const [eventos, setEventos] = useState<Evento[] | null>(null);
+  const [eventoId, setEventoId] = useState("");
   const [codigoManual, setCodigoManual] = useState("");
   const [escaneando, setEscaneando] = useState(false);
   const [procesando, setProcesando] = useState(false);
@@ -30,16 +31,19 @@ export default function MarcarVotoPage() {
   const ultimoCodigoRef = useRef<{ codigo: string; ts: number } | null>(null);
 
   useEffect(() => {
-    apiFetch<Evento | null>("/dia-electoral/activo").then(setEvento);
+    apiFetch<Evento[]>("/dia-electoral/eventos").then((lista) => {
+      setEventos(lista);
+      setEventoId(lista.find((e) => e.activo)?.id ?? lista[0]?.id ?? "");
+    });
   }, []);
 
   async function registrar(codigo: string) {
-    if (!evento || procesando) return;
+    if (!eventoId || procesando) return;
     setProcesando(true);
     try {
       const r = await apiFetch<{ militante: { nombre: string } }>("/dia-electoral/confirmar-mesa", {
         method: "POST",
-        body: JSON.stringify({ eventoId: evento.id, codigo }),
+        body: JSON.stringify({ eventoId, codigo }),
       });
       setResultado({ ok: true, mensaje: "Voto registrado", nombre: r.militante.nombre });
       setTotalRegistrados((n) => n + 1);
@@ -110,14 +114,15 @@ export default function MarcarVotoPage() {
 
   useEffect(() => () => detenerCamara(), []);
 
-  if (evento === null) {
+  if (eventos === null) return null;
+
+  if (eventos.length === 0) {
     return (
       <div className="mx-auto max-w-lg text-center">
-        <p className="text-sm text-gray-400">No hay ninguna jornada electoral activa todavía.</p>
+        <p className="text-sm text-gray-400">No hay ninguna jornada electoral registrada todavía.</p>
       </div>
     );
   }
-  if (!evento) return null;
 
   return (
     <div className="mx-auto max-w-lg">
@@ -125,9 +130,17 @@ export default function MarcarVotoPage() {
         <ScanLine className="h-6 w-6 text-indigo-600" />
         <h1 className="text-xl font-bold text-institucional-900">Registrar votos</h1>
       </div>
-      <p className="mb-6 text-sm text-gray-500">
-        {evento.nombre} · {totalRegistrados} registrados en esta sesión
-      </p>
+      <label className="mb-4 block">
+        <span className="mb-1 block text-sm font-medium text-gray-700">Jornada electoral</span>
+        <select value={eventoId} onChange={(e) => setEventoId(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+          {eventos.map((e) => (
+            <option key={e.id} value={e.id}>
+              {e.nombre} {e.activo ? "· activa" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="mb-6 text-sm text-gray-500">{totalRegistrados} registrados en esta sesión</p>
 
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-black">
         <video ref={videoRef} className={`w-full ${escaneando ? "block" : "hidden"}`} playsInline muted />
@@ -170,7 +183,7 @@ export default function MarcarVotoPage() {
           className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm"
         />
         <button
-          disabled={procesando}
+          disabled={!eventoId || procesando}
           className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
         >
           Registrar
