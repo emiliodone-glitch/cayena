@@ -14,6 +14,7 @@ export default function RootLayout() {
         <Stack screenOptions={{ headerStyle: { backgroundColor: "#1f7a34" }, headerTintColor: "#fff" }}>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="obra/[id]" options={{ title: "Detalle de obra" }} />
+          <Stack.Screen name="actividad/[id]" options={{ title: "Detalle de actividad" }} />
         </Stack>
       </OfflineProvider>
     </AuthProvider>

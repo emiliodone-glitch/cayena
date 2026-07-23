@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { FlatList, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useRouter } from "expo-router";
 import { apiFetch } from "@/api/client";
 
 type Actividad = {
@@ -9,9 +10,11 @@ type Actividad = {
   fecha: string;
   ubicacion: string | null;
   secretaria: { nombre: string };
+  _count?: { asistencias: number };
 };
 
 export default function FeedScreen() {
+  const router = useRouter();
   const [actividades, setActividades] = useState<Actividad[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -39,7 +42,7 @@ export default function FeedScreen() {
         />
       }
       renderItem={({ item }) => (
-        <View style={styles.card}>
+        <TouchableOpacity style={styles.card} onPress={() => router.push(`/actividad/${item.id}`)}>
           <Text style={styles.secretaria}>{item.secretaria.nombre}</Text>
           <Text style={styles.titulo}>{item.titulo}</Text>
           {item.descripcion && <Text style={styles.descripcion}>{item.descripcion}</Text>}
@@ -47,7 +50,10 @@ export default function FeedScreen() {
             {new Date(item.fecha).toLocaleDateString("es-DO", { weekday: "short", day: "numeric", month: "short" })}
             {item.ubicacion ? ` · ${item.ubicacion}` : ""}
           </Text>
-        </View>
+          {!!item._count?.asistencias && (
+            <Text style={styles.confirmados}>{item._count.asistencias} confirmaron asistencia</Text>
+          )}
+        </TouchableOpacity>
       )}
       ListEmptyComponent={<Text style={styles.vacio}>No hay actividades publicadas todavía.</Text>}
     />
@@ -69,5 +75,6 @@ const styles = StyleSheet.create({
   titulo: { fontSize: 16, fontWeight: "700", color: "#123f1c", marginTop: 2 },
   descripcion: { fontSize: 13, color: "#4b5563", marginTop: 4 },
   meta: { fontSize: 12, color: "#9ca3af", marginTop: 8 },
+  confirmados: { fontSize: 12, color: "#1f7a34", fontWeight: "600", marginTop: 6 },
   vacio: { textAlign: "center", color: "#9ca3af", marginTop: 40 },
 });

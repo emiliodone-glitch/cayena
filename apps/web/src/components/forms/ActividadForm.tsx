@@ -27,22 +27,30 @@ function aDatetimeLocal(iso: string) {
 
 export function ActividadForm({
   actividad,
+  duplicarDe,
   onSaved,
   onCancel,
 }: {
   actividad?: ActividadExistente;
+  // Prefill de creación (no de edición) usado por "Duplicar actividad": los
+  // valores se cargan en el formulario pero al guardar se hace un POST nuevo,
+  // no un PATCH sobre el original.
+  duplicarDe?: ActividadExistente;
   onSaved: () => void;
   onCancel: () => void;
 }) {
   const toast = useToast();
   const { user } = useAuth();
+  const base = actividad ?? duplicarDe;
   const [secretarias, setSecretarias] = useState<Secretaria[]>([]);
   const [form, setForm] = useState({
-    titulo: actividad?.titulo ?? "",
-    descripcion: actividad?.descripcion ?? "",
-    fecha: actividad ? aDatetimeLocal(actividad.fecha) : "",
-    ubicacion: actividad?.ubicacion ?? "",
-    secretariaId: actividad?.secretariaId ?? user?.secretariaId ?? "",
+    titulo: base?.titulo ?? "",
+    descripcion: base?.descripcion ?? "",
+    fecha: base ? aDatetimeLocal(base.fecha) : "",
+    ubicacion: base?.ubicacion ?? "",
+    secretariaId: base?.secretariaId ?? user?.secretariaId ?? "",
+    // Al duplicar, nunca se arrastra "publicada" — evita re-disparar el push
+    // de "nueva actividad" sin que el usuario lo decida explícitamente.
     publicadaApp: actividad?.publicadaApp ?? false,
   });
   const [fotos, setFotos] = useState<string[]>(actividad?.fotos ?? []);

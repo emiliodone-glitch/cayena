@@ -207,6 +207,7 @@ model User {
   secretariasComoTitular    Secretaria[]                 @relation("TitularActual")
   historialTitularidades    HistorialTitularSecretaria[] @relation("HistorialTitular")
   informesSubidos           InformeSecretaria[]          @relation("InformeAutor")
+  checkInsRegistrados       AsistenciaActividad[]        @relation("CheckInRegistrador")
 }
 
 model RefreshToken {
@@ -319,14 +320,46 @@ model Actividad {
   secretaria   Secretaria @relation(fields: [secretariaId], references: [id])
   publicadaApp Boolean    @default(false)
 
+  // Evita que el job de recordatorio (lib/recordatorios.ts) mande el push de
+  // "faltan 24h" más de una vez para la misma actividad al correr en bucle.
+  recordatorioEnviado Boolean @default(false)
+
   creadoPorId String
   creadoPor   User   @relation("ActividadCreador", fields: [creadoPorId], references: [id])
+
+  asistencias AsistenciaActividad[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([secretariaId])
   @@index([fecha])
+}
+
+// Asistencia de militantes a una actividad — separa la CONFIRMACIÓN (RSVP
+// desde la app, antes del evento) del CHECK-IN real (escaneado del carnet QR
+// del militante por el organizador, el día del evento). Ambas cosas pueden
+// darse independientes: alguien puede llegar sin haber confirmado antes, o
+// confirmar y no asistir — checkInAt nulo distingue ese caso.
+model AsistenciaActividad {
+  id          String    @id @default(cuid())
+  actividadId String
+  actividad   Actividad @relation(fields: [actividadId], references: [id], onDelete: Cascade)
+  militanteId String
+  militante   Militante @relation(fields: [militanteId], references: [id], onDelete: Cascade)
+
+  confirmado Boolean @default(true) // true = confirmó asistencia, false = canceló su RSVP
+
+  checkInAt    DateTime?
+  checkInPorId String?
+  checkInPor   User?     @relation("CheckInRegistrador", fields: [checkInPorId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([actividadId, militanteId])
+  @@index([actividadId])
+  @@index([militanteId])
 }
 
 // ---------------------------------------------------------------------------
@@ -398,6 +431,9 @@ model Militante {
   // Gamificación (Fase 2)
   puntos    Int                 @default(0)
   insignias MilitanteInsignia[]
+
+  asistencias  AsistenciaActividad[]
+  deviceTokens DeviceToken[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -494,9 +530,15 @@ model DeviceToken {
   // todos los dispositivos. Nulo si se registró sin sesión (app pública).
   userId     String?
   user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // La app pública no tiene cuenta de usuario, pero sí guarda localmente el id
+  // del militante (carnet). Ligar el device token a ese id permite mandarle
+  // push dirigido (ej. recordatorio de una actividad que confirmó) sin login.
+  militanteId String?
+  militante   Militante? @relation(fields: [militanteId], references: [id], onDelete: Cascade)
   createdAt  DateTime @default(now())
 
   @@index([userId])
+  @@index([militanteId])
 }
 
 model Notificacion {

@@ -15,6 +15,7 @@ import { apiFetch, ApiError } from "@/api/client";
 import { MI_MILITANTE_ID_KEY, MI_MILITANTE_NOMBRE_KEY } from "@/lib/carnet";
 import { encolarRegistro } from "@/lib/offlineQueue";
 import { useOffline } from "@/lib/offlineContext";
+import { registrarDispositivoPush } from "@/hooks/usePushRegistration";
 
 type Lista = { id: string; nombre: string }[];
 
@@ -91,6 +92,7 @@ export default function UnirmeScreen() {
       );
       await AsyncStorage.setItem(MI_MILITANTE_ID_KEY, militante.id);
       await AsyncStorage.setItem(MI_MILITANTE_NOMBRE_KEY, nombre);
+      registrarDispositivoPush();
       setEnviado(true);
       apiFetch<{ puntos: number }>(`/militantes/mi-progreso/${cedula}`, {}, false)
         .then((p) => setPuntos(p.puntos))

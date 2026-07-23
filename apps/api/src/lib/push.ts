@@ -50,3 +50,20 @@ export async function enviarPushAUsuario(userId: string, titulo: string, cuerpo:
     data: { titulo, cuerpo, tipo, destinatarios, destinatarioUserId: userId },
   });
 }
+
+// Recordatorio de actividades (ver lib/recordatorios.ts): dirigido solo a los
+// militantes que confirmaron asistencia (RSVP) desde la app pública, que no
+// tiene cuenta de usuario — el device token se liga a su militanteId en vez
+// de a un userId (ver POST /notificaciones/device-token).
+export async function enviarPushAMilitantes(militanteIds: string[], titulo: string, cuerpo: string, tipo: string) {
+  if (militanteIds.length === 0) return;
+  const dispositivos = await prisma.deviceToken.findMany({ where: { militanteId: { in: militanteIds } } });
+  const destinatarios = await enviarATokens(
+    dispositivos.map((d) => d.token),
+    titulo,
+    cuerpo,
+  );
+  await prisma.notificacion.create({
+    data: { titulo, cuerpo, tipo, destinatarios },
+  });
+}

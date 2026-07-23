@@ -13,6 +13,7 @@
     "@cayena/shared": "*",
     "clsx": "^2.1.1",
     "jspdf": "^4.2.1",
+    "jsqr": "^1.4.0",
     "leaflet": "^1.9.4",
     "leaflet.heat": "^0.2.0",
     "lucide-react": "^0.408.0",

@@ -1,17 +1,30 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import Link from "next/link";
+import { Pencil, Plus, Trash2, Copy, Images, UserCheck, ScanLine } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/components/Toast";
 import { Drawer } from "@/components/Drawer";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { TableSkeleton } from "@/components/Skeleton";
+import { FotoUploader } from "@/components/FotoUploader";
 import { ActividadForm, type ActividadExistente } from "@/components/forms/ActividadForm";
 
 type Actividad = ActividadExistente & {
   secretaria: { nombre: string };
+  confirmados: number;
+  checkIns: number;
+};
+
+type Secretaria = { id: string; nombre: string };
+
+type Asistencia = {
+  id: string;
+  confirmado: boolean;
+  checkInAt: string | null;
+  militante: { nombre: string; cedula: string };
 };
 
 function sameDay(a: Date, b: Date) {
@@ -23,19 +36,37 @@ export default function ActividadesPage() {
   const toast = useToast();
   const [vista, setVista] = useState<"lista" | "calendario">("lista");
   const [actividades, setActividades] = useState<Actividad[] | null>(null);
+  const [secretarias, setSecretarias] = useState<Secretaria[]>([]);
   const [q, setQ] = useState("");
+  const [secretariaFiltro, setSecretariaFiltro] = useState("");
+  const [desdeFiltro, setDesdeFiltro] = useState("");
+  const [hastaFiltro, setHastaFiltro] = useState("");
   const [mesActual, setMesActual] = useState(() => new Date());
   const [diaSeleccionado, setDiaSeleccionado] = useState<Date | null>(null);
   const [drawerAbierto, setDrawerAbierto] = useState(false);
   const [editando, setEditando] = useState<Actividad | undefined>(undefined);
+  const [duplicando, setDuplicando] = useState<Actividad | undefined>(undefined);
   const [eliminando, setEliminando] = useState<Actividad | null>(null);
   const [borrando, setBorrando] = useState(false);
+  const [galeriaDe, setGaleriaDe] = useState<Actividad | null>(null);
+  const [fotosGaleria, setFotosGaleria] = useState<string[]>([]);
+  const [guardandoGaleria, setGuardandoGaleria] = useState(false);
+  const [asistentesDe, setAsistentesDe] = useState<Actividad | null>(null);
+  const [asistencias, setAsistencias] = useState<Asistencia[] | null>(null);
 
   function cargar() {
-    apiFetch<Actividad[]>("/actividades").then(setActividades);
+    const params = new URLSearchParams();
+    if (secretariaFiltro) params.set("secretariaId", secretariaFiltro);
+    if (desdeFiltro) params.set("desde", new Date(desdeFiltro).toISOString());
+    if (hastaFiltro) params.set("hasta", new Date(hastaFiltro).toISOString());
+    const qs = params.toString();
+    apiFetch<Actividad[]>(`/actividades${qs ? `?${qs}` : ""}`).then(setActividades);
   }
 
-  useEffect(cargar, []);
+  useEffect(cargar, [secretariaFiltro, desdeFiltro, hastaFiltro]);
+  useEffect(() => {
+    apiFetch<Secretaria[]>("/secretarias").then(setSecretarias).catch(() => setSecretarias([]));
+  }, []);
 
   const diasDelMes = useMemo(() => {
     const year = mesActual.getFullYear();
@@ -56,17 +87,57 @@ export default function ActividadesPage() {
 
   function abrirNueva() {
     setEditando(undefined);
+    setDuplicando(undefined);
     setDrawerAbierto(true);
   }
 
   function abrirEditar(a: Actividad) {
     setEditando(a);
+    setDuplicando(undefined);
+    setDrawerAbierto(true);
+  }
+
+  function abrirDuplicar(a: Actividad) {
+    // Corre la fecha una semana para el caso de uso típico (reunión/asamblea
+    // recurrente); el usuario la ajusta en el formulario antes de guardar.
+    const nuevaFecha = new Date(a.fecha);
+    nuevaFecha.setDate(nuevaFecha.getDate() + 7);
+    setEditando(undefined);
+    setDuplicando({ ...a, titulo: `${a.titulo} (copia)`, fecha: nuevaFecha.toISOString(), fotos: [] });
     setDrawerAbierto(true);
   }
 
   function onSaved() {
     setDrawerAbierto(false);
     cargar();
+  }
+
+  function abrirGaleria(a: Actividad) {
+    setGaleriaDe(a);
+    setFotosGaleria(a.fotos);
+  }
+
+  async function guardarGaleria() {
+    if (!galeriaDe) return;
+    setGuardandoGaleria(true);
+    try {
+      await apiFetch(`/actividades/${galeriaDe.id}`, { method: "PATCH", body: JSON.stringify({ fotos: fotosGaleria }) });
+      toast("Galería actualizada");
+      setGaleriaDe(null);
+      cargar();
+    } catch {
+      toast("No se pudo guardar la galería", "error");
+    } finally {
+      setGuardandoGaleria(false);
+    }
+  }
+
+  function abrirAsistentes(a: Actividad) {
+    setAsistentesDe(a);
+    setAsistencias(null);
+    apiFetch<Asistencia[]>(`/actividades/${a.id}/asistencia`)
+      .then(setAsistencias)
+      .catch(() => setAsistencias([]));
   }
 
   async function togglePublicar(a: Actividad) {
@@ -121,6 +192,14 @@ export default function ActividadesPage() {
             </button>
           </div>
           {puedeEditar && (
+            <Link
+              href="/actividades/checkin"
+              className="flex items-center gap-1.5 rounded-lg border border-institucional-200 px-4 py-2 text-sm font-semibold text-institucional-700 hover:bg-institucional-50"
+            >
+              <ScanLine className="h-4 w-4" /> Registrar asistencia
+            </Link>
+          )}
+          {puedeEditar && (
             <button
               onClick={abrirNueva}
               className="flex items-center gap-1.5 rounded-lg bg-institucional-600 px-4 py-2 text-sm font-semibold text-white hover:bg-institucional-700"
@@ -129,6 +208,47 @@ export default function ActividadesPage() {
             </button>
           )}
         </div>
+      </div>
+
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <select
+          value={secretariaFiltro}
+          onChange={(e) => setSecretariaFiltro(e.target.value)}
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-institucional-600 focus:outline-none"
+        >
+          <option value="">Todas las secretarías</option>
+          {secretarias.map((s) => (
+            <option key={s.id} value={s.id}>{s.nombre}</option>
+          ))}
+        </select>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-gray-400">Desde</span>
+          <input
+            type="date"
+            value={desdeFiltro}
+            onChange={(e) => setDesdeFiltro(e.target.value)}
+            className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
+          />
+          <span className="text-xs text-gray-400">Hasta</span>
+          <input
+            type="date"
+            value={hastaFiltro}
+            onChange={(e) => setHastaFiltro(e.target.value)}
+            className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
+          />
+        </div>
+        {(secretariaFiltro || desdeFiltro || hastaFiltro) && (
+          <button
+            onClick={() => {
+              setSecretariaFiltro("");
+              setDesdeFiltro("");
+              setHastaFiltro("");
+            }}
+            className="text-xs font-medium text-institucional-600 hover:underline"
+          >
+            Limpiar filtros
+          </button>
+        )}
       </div>
 
       {vista === "calendario" && (
@@ -183,6 +303,7 @@ export default function ActividadesPage() {
                 <th className="px-4 py-2">Ubicación</th>
                 <th className="px-4 py-2">Secretaría</th>
                 <th className="px-4 py-2">Publicada</th>
+                <th className="px-4 py-2">Asistencia</th>
                 {puedeEditar && <th className="px-4 py-2 text-right">Acciones</th>}
               </tr>
             </thead>
@@ -204,18 +325,44 @@ export default function ActividadesPage() {
                       {a.publicadaApp ? "Publicada" : "No publicada"}
                     </button>
                   </td>
+                  <td className="px-4 py-2">
+                    <button
+                      onClick={() => abrirAsistentes(a)}
+                      className="flex items-center gap-1 text-xs text-gray-500 hover:text-institucional-700 hover:underline"
+                      title="Ver asistentes"
+                    >
+                      <UserCheck className="h-3.5 w-3.5" />
+                      {a.confirmados} confirmados · {a.checkIns} check-in
+                    </button>
+                  </td>
                   {puedeEditar && (
                     <td className="px-4 py-2 text-right">
                       <div className="flex justify-end gap-1">
                         <button
+                          onClick={() => abrirGaleria(a)}
+                          className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-institucional-700"
+                          title="Galería de fotos"
+                        >
+                          <Images className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => abrirDuplicar(a)}
+                          className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-institucional-700"
+                          title="Duplicar actividad"
+                        >
+                          <Copy className="h-4 w-4" />
+                        </button>
+                        <button
                           onClick={() => abrirEditar(a)}
                           className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-institucional-700"
+                          title="Editar"
                         >
                           <Pencil className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => setEliminando(a)}
                           className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                          title="Eliminar"
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
@@ -226,7 +373,7 @@ export default function ActividadesPage() {
               ))}
               {actividadesVisibles.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-6 text-center text-gray-400">
+                  <td colSpan={7} className="px-4 py-6 text-center text-gray-400">
                     Sin actividades.
                   </td>
                 </tr>
@@ -236,8 +383,56 @@ export default function ActividadesPage() {
         </div>
       )}
 
-      <Drawer open={drawerAbierto} onClose={() => setDrawerAbierto(false)} title={editando ? "Editar actividad" : "Nueva actividad"}>
-        <ActividadForm actividad={editando} onSaved={onSaved} onCancel={() => setDrawerAbierto(false)} />
+      <Drawer
+        open={drawerAbierto}
+        onClose={() => setDrawerAbierto(false)}
+        title={editando ? "Editar actividad" : duplicando ? "Duplicar actividad" : "Nueva actividad"}
+      >
+        <ActividadForm actividad={editando} duplicarDe={duplicando} onSaved={onSaved} onCancel={() => setDrawerAbierto(false)} />
+      </Drawer>
+
+      <Drawer open={!!galeriaDe} onClose={() => setGaleriaDe(null)} title={`Galería — ${galeriaDe?.titulo ?? ""}`}>
+        <p className="mb-3 text-sm text-gray-500">
+          Sube fotos de evidencia después de que ocurrió la actividad (asambleas, entregas, encuentros).
+        </p>
+        <FotoUploader fotos={fotosGaleria} onChange={setFotosGaleria} />
+        <button
+          onClick={guardarGaleria}
+          disabled={guardandoGaleria}
+          className="mt-4 w-full rounded-lg bg-institucional-600 px-4 py-2 text-sm font-semibold text-white hover:bg-institucional-700 disabled:opacity-60"
+        >
+          {guardandoGaleria ? "Guardando…" : "Guardar galería"}
+        </button>
+      </Drawer>
+
+      <Drawer open={!!asistentesDe} onClose={() => setAsistentesDe(null)} title={`Asistentes — ${asistentesDe?.titulo ?? ""}`}>
+        {asistencias === null ? (
+          <p className="text-sm text-gray-400">Cargando…</p>
+        ) : asistencias.length === 0 ? (
+          <p className="text-sm text-gray-400">Nadie ha confirmado ni registrado asistencia todavía.</p>
+        ) : (
+          <div className="space-y-2">
+            {asistencias.map((a) => (
+              <div key={a.id} className="flex items-center justify-between rounded-lg border border-gray-100 px-3 py-2 text-sm">
+                <div>
+                  <div className="font-medium text-gray-800">{a.militante.nombre}</div>
+                  <div className="text-xs text-gray-400">{a.militante.cedula}</div>
+                </div>
+                <div className="text-right text-xs">
+                  {a.checkInAt ? (
+                    <span className="font-semibold text-institucional-700">
+                      Check-in {new Date(a.checkInAt).toLocaleString("es-DO")}
+                    </span>
+                  ) : a.confirmado ? (
+                    <span className="text-amber-600">Confirmó, sin check-in</span>
+                  ) : (
+                    <span className="text-gray-400">Canceló su confirmación</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </Drawer>
 
       <ConfirmDialog

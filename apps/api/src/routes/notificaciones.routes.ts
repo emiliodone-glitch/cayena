@@ -8,7 +8,14 @@ import { verifyAccessToken } from "../lib/jwt";
 
 export const notificacionesRouter = Router();
 
-const tokenSchema = z.object({ token: z.string().min(10), plataforma: z.string().default("expo") });
+const tokenSchema = z.object({
+  token: z.string().min(10),
+  plataforma: z.string().default("expo"),
+  // La app pública no tiene cuenta de usuario, pero sí guarda localmente el
+  // id del militante (carnet) — ligarlo acá permite mandarle recordatorios
+  // de actividades que confirmó sin necesitar login (ver lib/recordatorios.ts).
+  militanteId: z.string().optional(),
+});
 
 // Registro de dispositivo desde la app (sin auth obligatoria: cualquier
 // usuario de la app, haya iniciado sesión o no, debe poder recibir
@@ -31,7 +38,7 @@ notificacionesRouter.post(
     }
     await prisma.deviceToken.upsert({
       where: { token: data.token },
-      update: { userId },
+      update: { userId, militanteId: data.militanteId },
       create: { ...data, userId },
     });
     res.status(204).send();
