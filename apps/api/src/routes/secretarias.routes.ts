@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@cayena/database";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { asyncRoute, HttpError } from "../middleware/errorHandler";
+import { estaInactiva, periodoAnterior, tieneInformeDelPeriodo, ultimaActividad } from "../lib/saludSecretaria";
 
 export const secretariasRouter = Router();
 secretariasRouter.use(requireAuth);
@@ -18,6 +19,88 @@ secretariasRouter.get(
       include: { titular: TITULAR_SELECT },
     });
     res.json(secretarias);
+  }),
+);
+
+// Badge del sidebar: cuántas secretarías tienen algo pendiente ahora mismo
+// (informe atrasado o sin ninguna actividad reciente) — mismo criterio que
+// usan las alertas automáticas, así el número nunca contradice lo que ya se
+// le avisó a cada titular. Debe ir ANTES de "/:id" (si no, Express lo
+// atraparía como si "pendientes-count" fuera un id).
+secretariasRouter.get(
+  "/pendientes-count",
+  requireRole("SUPERADMIN"),
+  asyncRoute(async (_req, res) => {
+    const periodo = periodoAnterior();
+    const pasoElLimite = new Date().getDate() >= 10;
+    const secretarias = await prisma.secretaria.findMany({
+      select: { id: true, createdAt: true, titular: { select: { active: true } } },
+    });
+
+    let pendientes = 0;
+    for (const s of secretarias) {
+      // Sin titular activo nadie puede subir el informe ni se le puede
+      // avisar a nadie — no cuenta como "pendiente accionable" (mismo gate
+      // que usan las alertas automáticas antes de notificar).
+      if (!s.titular?.active) continue;
+      const informePendiente = pasoElLimite && !(await tieneInformeDelPeriodo(s.id, periodo));
+      const inactiva = await estaInactiva(s.id, s.createdAt);
+      if (informePendiente || inactiva) pendientes++;
+    }
+    res.json({ pendientes });
+  }),
+);
+
+// Ranking de secretarías: combina avance de objetivos, puntualidad de
+// informes y actividad reciente en un solo puntaje — mismo espíritu que el
+// ranking de promotores (/usuarios/ranking-captacion), pero a nivel
+// institucional en vez de individual.
+secretariasRouter.get(
+  "/ranking",
+  requireRole("SUPERADMIN", "JEFE_SECRETARIA", "AUDITOR"),
+  asyncRoute(async (_req, res) => {
+    const secretarias = await prisma.secretaria.findMany({
+      include: {
+        titular: { select: { nombre: true, active: true } },
+        metasPoa: { include: { avances: true } },
+        informes: { select: { id: true } },
+      },
+    });
+
+    const filas = await Promise.all(
+      secretarias.map(async (s) => {
+        const objetivos = s.metasPoa.map((m) => {
+          const totalAvance = m.avances.reduce((sum, a) => sum + a.valor, 0);
+          return m.indicadorObjetivo > 0 ? Math.min(1, totalAvance / m.indicadorObjetivo) : 0;
+        });
+        const avancePromedio =
+          objetivos.length > 0 ? Math.round((objetivos.reduce((s2, p) => s2 + p, 0) / objetivos.length) * 100) : null;
+        const reciente = await ultimaActividad(s.id);
+        const diasSinActividad = reciente ? Math.floor((Date.now() - reciente.getTime()) / (24 * 3600 * 1000)) : null;
+
+        // Puntaje 0-100: 50% avance de objetivos, 25% informes subidos
+        // (tope 5, o sea 20 puntos cada uno), 25% haber tenido actividad en
+        // los últimos 30 días — así una secretaría sin objetivos definidos
+        // todavía no queda en cero solo por eso.
+        const puntajeObjetivos = avancePromedio ?? 0;
+        const puntajeInformes = Math.min(5, s.informes.length) * 20;
+        const puntajeActividad = diasSinActividad != null && diasSinActividad <= 30 ? 100 : 0;
+        const puntaje = Math.round(puntajeObjetivos * 0.5 + puntajeInformes * 0.25 + puntajeActividad * 0.25);
+
+        return {
+          id: s.id,
+          nombre: s.nombre,
+          titular: s.titular?.active ? s.titular.nombre : null,
+          avancePromedioObjetivos: avancePromedio,
+          informesSubidos: s.informes.length,
+          diasSinActividad,
+          puntaje,
+        };
+      }),
+    );
+
+    filas.sort((a, b) => b.puntaje - a.puntaje);
+    res.json(filas);
   }),
 );
 

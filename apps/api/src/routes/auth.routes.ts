@@ -1,7 +1,7 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
-import { prisma } from "@cayena/database";
+import { prisma, type Role } from "@cayena/database";
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from "../lib/jwt";
 import { asyncRoute, HttpError } from "../middleware/errorHandler";
 import { requireAuth } from "../middleware/auth";
@@ -78,6 +78,42 @@ function serializarTerritorio(user: UsuarioConTerritorio) {
   };
 }
 
+// Compartido entre /login y /activar/:token: firma access+refresh token y
+// arma el mismo payload de usuario que consume el front (evita que activar
+// una cuenta deje al usuario logueado con una forma distinta a la del login).
+async function emitirSesion(user: UsuarioConTerritorio & { id: string; nombre: string; email: string; role: Role; secretariaId: string | null }) {
+  const accessToken = signAccessToken({
+    sub: user.id,
+    role: user.role,
+    secretariaId: user.secretariaId,
+    provinciaId: user.provinciaId,
+    municipioId: user.municipioId,
+    distritoMunicipalId: user.distritoMunicipalId,
+  });
+  const refreshToken = signRefreshToken(user.id);
+
+  await prisma.refreshToken.create({
+    data: {
+      token: refreshToken,
+      userId: user.id,
+      expiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000),
+    },
+  });
+
+  return {
+    accessToken,
+    refreshToken,
+    user: {
+      id: user.id,
+      nombre: user.nombre,
+      email: user.email,
+      role: user.role,
+      secretariaId: user.secretariaId,
+      ...serializarTerritorio(user),
+    },
+  };
+}
+
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
@@ -96,36 +132,56 @@ authRouter.post(
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) throw new HttpError(401, "Credenciales inválidas");
 
-    const accessToken = signAccessToken({
-      sub: user.id,
-      role: user.role,
-      secretariaId: user.secretariaId,
-      provinciaId: user.provinciaId,
-      municipioId: user.municipioId,
-      distritoMunicipalId: user.distritoMunicipalId,
-    });
-    const refreshToken = signRefreshToken(user.id);
+    res.json(await emitirSesion(user));
+  }),
+);
 
-    await prisma.refreshToken.create({
+// Activación de cuenta por invitación (self-service): un SUPERADMIN genera
+// el link (ver POST /usuarios/:id/invitacion) y se lo pasa al destinatario
+// por el canal que sea (WhatsApp, correo personal) — acá no se envía nada,
+// solo se valida el token y se completa el alta.
+authRouter.get(
+  "/activar/:token",
+  asyncRoute(async (req, res) => {
+    const user = await prisma.user.findUnique({
+      where: { invitacionToken: req.params.token },
+      include: { secretaria: { select: { nombre: true } } },
+    });
+    if (!user || !user.invitacionExpira || user.invitacionExpira < new Date()) {
+      throw new HttpError(400, "Este enlace de invitación no es válido o ya venció");
+    }
+    res.json({ nombre: user.nombre, secretaria: user.secretaria?.nombre ?? null });
+  }),
+);
+
+const activarSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8),
+});
+
+authRouter.post(
+  "/activar/:token",
+  asyncRoute(async (req, res) => {
+    const data = activarSchema.parse(req.body);
+    const invitado = await prisma.user.findUnique({ where: { invitacionToken: req.params.token } });
+    if (!invitado || !invitado.invitacionExpira || invitado.invitacionExpira < new Date()) {
+      throw new HttpError(400, "Este enlace de invitación no es válido o ya venció");
+    }
+
+    const passwordHash = await bcrypt.hash(data.password, 10);
+    const user = await prisma.user.update({
+      where: { id: invitado.id },
       data: {
-        token: refreshToken,
-        userId: user.id,
-        expiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000),
+        email: data.email,
+        passwordHash,
+        active: true,
+        invitacionToken: null,
+        invitacionExpira: null,
       },
+      include: INCLUDE_TERRITORIO,
     });
 
-    res.json({
-      accessToken,
-      refreshToken,
-      user: {
-        id: user.id,
-        nombre: user.nombre,
-        email: user.email,
-        role: user.role,
-        secretariaId: user.secretariaId,
-        ...serializarTerritorio(user),
-      },
-    });
+    res.json(await emitirSesion(user));
   }),
 );
 

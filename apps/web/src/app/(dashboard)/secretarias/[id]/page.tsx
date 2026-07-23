@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
-import { ArrowLeft, Plus, FileText, History } from "lucide-react";
+import { ArrowLeft, Plus, FileText, History, Download } from "lucide-react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/components/Toast";
@@ -241,6 +241,109 @@ export default function SecretariaDetallePage({ params }: { params: { id: string
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function exportarInformePDF() {
+    if (!secretaria) return;
+    const { jsPDF } = await import("jspdf");
+    const doc = new jsPDF({ unit: "pt", format: "a4" });
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const M = 40;
+    let y = M;
+
+    doc.setFontSize(16);
+    doc.setTextColor(20, 83, 45);
+    doc.text(`Informe de gestión — ${secretaria.nombre}`, M, y);
+    y += 18;
+    doc.setFontSize(9);
+    doc.setTextColor(107, 114, 128);
+    doc.text(
+      `Titular: ${secretaria.titular?.nombre ?? "Vacante"} · Generado el ${new Date().toLocaleDateString("es-DO", { day: "numeric", month: "long", year: "numeric" })}`,
+      M,
+      y,
+    );
+    y += 28;
+
+    function titulo(texto: string) {
+      if (y > pageH - 60) {
+        doc.addPage();
+        y = M;
+      }
+      doc.setFontSize(12);
+      doc.setTextColor(20, 83, 45);
+      doc.text(texto, M, y);
+      y += 6;
+      doc.setDrawColor(229, 231, 235);
+      doc.line(M, y, pageW - M, y);
+      y += 18;
+    }
+
+    titulo("Objetivos");
+    doc.setFontSize(10);
+    if (objetivos && objetivos.length > 0) {
+      for (const o of objetivos) {
+        if (y > pageH - 40) {
+          doc.addPage();
+          y = M;
+        }
+        doc.setTextColor(31, 41, 55);
+        doc.text(`${o.nombre} — ${o.totalAvance}/${o.indicadorObjetivo} (${o.porcentaje}%)`, M, y);
+        y += 16;
+      }
+    } else {
+      doc.setTextColor(156, 163, 175);
+      doc.text("Sin objetivos registrados.", M, y);
+      y += 16;
+    }
+    y += 12;
+
+    titulo("Presupuesto");
+    doc.setFontSize(10);
+    doc.setTextColor(31, 41, 55);
+    if (presupuesto?.presupuestoAsignado != null) {
+      doc.text(
+        `Asignado: ${fmtMoney.format(presupuesto.presupuestoAsignado)} · Ejecutado: ${fmtMoney.format(presupuesto.ejecutado)} (${presupuesto.porcentaje}%)`,
+        M,
+        y,
+      );
+    } else {
+      doc.setTextColor(156, 163, 175);
+      doc.text("Sin presupuesto asignado.", M, y);
+    }
+    y += 28;
+
+    titulo("Informes de gestión");
+    doc.setFontSize(10);
+    if (informes && informes.length > 0) {
+      for (const inf of informes) {
+        if (y > pageH - 60) {
+          doc.addPage();
+          y = M;
+        }
+        doc.setTextColor(20, 83, 45);
+        doc.setFont("helvetica", "bold");
+        doc.text(inf.periodo, M, y);
+        y += 14;
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(55, 65, 81);
+        const lineas = doc.splitTextToSize(inf.resumen, pageW - 2 * M);
+        for (const linea of lineas) {
+          if (y > pageH - 40) {
+            doc.addPage();
+            y = M;
+          }
+          doc.text(linea, M, y);
+          y += 14;
+        }
+        y += 10;
+      }
+    } else {
+      doc.setTextColor(156, 163, 175);
+      doc.text("Sin informes registrados.", M, y);
+    }
+
+    doc.save(`informe-gestion-${secretaria.nombre.toLowerCase().replace(/\s+/g, "-")}.pdf`);
   }
 
   const periodoPendiente = (() => {
@@ -508,16 +611,22 @@ export default function SecretariaDetallePage({ params }: { params: { id: string
               Falta el informe de gestión de <strong>{periodoPendiente}</strong>.
             </div>
           )}
-          {puedeGestionar && (
-            <div className="mb-4 flex justify-end">
+          <div className="mb-4 flex justify-end gap-2">
+            <button
+              onClick={exportarInformePDF}
+              className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"
+            >
+              <Download className="h-4 w-4" /> Exportar PDF
+            </button>
+            {puedeGestionar && (
               <button
                 onClick={() => setDrawerInforme(true)}
                 className="flex items-center gap-1.5 rounded-lg bg-institucional-600 px-4 py-2 text-sm font-semibold text-white hover:bg-institucional-700"
               >
                 <Plus className="h-4 w-4" /> Nuevo informe
               </button>
-            </div>
-          )}
+            )}
+          </div>
           <div className="space-y-3">
             {informes === null && <p className="py-6 text-center text-gray-400">Cargando…</p>}
             {informes?.map((i) => (

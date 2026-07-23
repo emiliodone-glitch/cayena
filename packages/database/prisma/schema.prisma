@@ -172,6 +172,14 @@ model User {
   // visible del rol de cada persona dentro del equipo.
   cargoSecretaria String?
 
+  // Invitación de activación (self-service): en vez de que un SUPERADMIN le
+  // teclee correo y contraseña a cada usuario creado por seed/carga masiva,
+  // se genera un link de un solo uso — el destinatario entra, pone su
+  // correo real y su propia contraseña, y el token se invalida. Nulo cuando
+  // no hay invitación pendiente.
+  invitacionToken  String?   @unique
+  invitacionExpira DateTime?
+
   // Territorio asignado (coordinador de zona): a lo sumo uno de los tres
   // debiera estar presente a la vez (se valida en la app, no en la BD) — el
   // más específico define el alcance del usuario. Sin ninguno, el usuario

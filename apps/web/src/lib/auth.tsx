@@ -32,6 +32,7 @@ type AuthContextValue = {
   user: Usuario | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
+  activar: (token: string, email: string, password: string) => Promise<void>;
   logout: () => void;
 };
 
@@ -59,6 +60,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     router.push("/dashboard");
   }
 
+  // Activación de cuenta por invitación (ver POST /usuarios/:id/invitacion):
+  // confirma el correo real y la contraseña elegidos, y deja logueado de una
+  // vez — misma forma de respuesta que /auth/login, así que no hay que
+  // duplicar el manejo de tokens.
+  async function activar(token: string, email: string, password: string) {
+    const data = await apiFetch<{ accessToken: string; refreshToken: string; user: Usuario }>(
+      `/auth/activar/${token}`,
+      { method: "POST", body: JSON.stringify({ email, password }) },
+    );
+    setTokens(data.accessToken, data.refreshToken);
+    setUser(data.user);
+    router.push("/dashboard");
+  }
+
   function logout() {
     clearTokens();
     setUser(null);
@@ -66,7 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, activar, logout }}>
       {children}
     </AuthContext.Provider>
   );

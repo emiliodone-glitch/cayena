@@ -1,9 +1,10 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import { z } from "zod";
 import { Role, prisma } from "@cayena/database";
 import { requireAuth, requireRole } from "../middleware/auth";
-import { asyncRoute } from "../middleware/errorHandler";
+import { asyncRoute, HttpError } from "../middleware/errorHandler";
 import { calcularRango, type Periodo } from "../lib/periodo";
 
 export const usuariosRouter = Router();
@@ -186,5 +187,32 @@ usuariosRouter.patch(
     });
     const { passwordHash: _ph, ...rest } = usuario;
     res.json(rest);
+  }),
+);
+
+const DIAS_VIGENCIA_INVITACION = 7;
+
+// Invitación de activación de cuenta (self-service): en vez de que el
+// SUPERADMIN le teclee correo real y contraseña a cada usuario creado por
+// carga masiva (el organigrama de titulares, por ejemplo), genera un link
+// de un solo uso — el destinatario entra, confirma su correo real y crea su
+// propia contraseña (ver /auth/activar/:token). Se puede volver a llamar
+// para reemplazar una invitación anterior (por si se venció o se perdió el link).
+usuariosRouter.post(
+  "/:id/invitacion",
+  asyncRoute(async (req, res) => {
+    const usuario = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!usuario) throw new HttpError(404, "Usuario no encontrado");
+    if (usuario.active) throw new HttpError(400, "Este usuario ya está activo, no necesita invitación");
+
+    const token = crypto.randomBytes(24).toString("hex");
+    await prisma.user.update({
+      where: { id: req.params.id },
+      data: {
+        invitacionToken: token,
+        invitacionExpira: new Date(Date.now() + DIAS_VIGENCIA_INVITACION * 24 * 3600 * 1000),
+      },
+    });
+    res.json({ token, expiraEn: DIAS_VIGENCIA_INVITACION });
   }),
 );

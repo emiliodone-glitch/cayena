@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
@@ -19,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
+import { apiFetch } from "@/lib/api";
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
@@ -37,6 +39,19 @@ const NAV = [
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const pathname = usePathname();
   const { user, logout } = useAuth();
+  const [pendientes, setPendientes] = useState(0);
+
+  // Cuántas secretarías tienen algo pendiente ahora mismo (informe atrasado
+  // o sin actividad reciente) — mismo criterio que ya usan las alertas
+  // automáticas, así el número del sidebar nunca contradice lo que se le
+  // avisó a cada titular. Solo le interesa al SUPERADMIN (es quien gestiona
+  // el organigrama completo, no una sola secretaría).
+  useEffect(() => {
+    if (user?.role !== "SUPERADMIN") return;
+    apiFetch<{ pendientes: number }>("/secretarias/pendientes-count")
+      .then((r) => setPendientes(r.pendientes))
+      .catch(() => setPendientes(0));
+  }, [user]);
 
   return (
     <>
@@ -81,6 +96,11 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                 >
                   <Icon className="h-4 w-4 flex-shrink-0" />
                   {item.label}
+                  {item.href === "/secretarias" && pendientes > 0 && (
+                    <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">
+                      {pendientes > 9 ? "9+" : pendientes}
+                    </span>
+                  )}
                 </Link>
               );
             },

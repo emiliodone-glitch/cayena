@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { Plus, Pencil } from "lucide-react";
+import { Plus, Pencil, Link as LinkIcon, Copy, Check } from "lucide-react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import { Drawer } from "@/components/Drawer";
@@ -81,6 +81,8 @@ export default function UsuariosPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [desactivando, setDesactivando] = useState<Usuario | null>(null);
+  const [invitacionLink, setInvitacionLink] = useState<string | null>(null);
+  const [invitacionCopiado, setInvitacionCopiado] = useState(false);
 
   // Listas para las cascadas de territorio (provincia → municipio → distrito).
   const [provincias, setProvincias] = useState<Lista>([]);
@@ -210,6 +212,24 @@ export default function UsuariosPage() {
     }
   }
 
+  async function generarInvitacion(u: Usuario) {
+    try {
+      const { token } = await apiFetch<{ token: string }>(`/usuarios/${u.id}/invitacion`, { method: "POST" });
+      setInvitacionLink(`${window.location.origin}/activar-cuenta/${token}`);
+      setInvitacionCopiado(false);
+    } catch {
+      toast("No se pudo generar la invitación", "error");
+    }
+  }
+
+  function copiarInvitacion() {
+    if (!invitacionLink) return;
+    navigator.clipboard.writeText(invitacionLink).then(() => {
+      setInvitacionCopiado(true);
+      setTimeout(() => setInvitacionCopiado(false), 2000);
+    });
+  }
+
   const filtrados = (usuarios ?? []).filter((u) => {
     const texto = q.trim().toLowerCase();
     if (!texto) return true;
@@ -280,12 +300,23 @@ export default function UsuariosPage() {
                     </button>
                   </td>
                   <td className="px-4 py-2 text-right">
-                    <button
-                      onClick={() => abrirEditar(u)}
-                      className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-institucional-700"
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      {!u.active && (
+                        <button
+                          onClick={() => generarInvitacion(u)}
+                          title="Generar link de invitación para activar la cuenta"
+                          className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-institucional-700"
+                        >
+                          <LinkIcon className="h-4 w-4" />
+                        </button>
+                      )}
+                      <button
+                        onClick={() => abrirEditar(u)}
+                        className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-institucional-700"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -486,6 +517,23 @@ export default function UsuariosPage() {
         onConfirm={() => desactivando && toggleActivo(desactivando)}
         onCancel={() => setDesactivando(null)}
       />
+
+      <Drawer open={!!invitacionLink} onClose={() => setInvitacionLink(null)} title="Invitación generada">
+        <p className="mb-3 text-sm text-gray-600">
+          Copia este enlace y envíaselo por el canal que sea (WhatsApp, correo personal). Es de un solo uso y vence en
+          7 días — al entrar, la persona confirma su correo real y crea su propia contraseña.
+        </p>
+        <div className="flex items-center gap-2 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-xs text-gray-700">
+          <span className="flex-1 truncate">{invitacionLink}</span>
+          <button
+            onClick={copiarInvitacion}
+            className="flex flex-shrink-0 items-center gap-1 rounded-md bg-institucional-600 px-2 py-1 text-xs font-semibold text-white hover:bg-institucional-700"
+          >
+            {invitacionCopiado ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+            {invitacionCopiado ? "Copiado" : "Copiar"}
+          </button>
+        </div>
+      </Drawer>
     </div>
   );
 }

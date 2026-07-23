@@ -1,15 +1,17 @@
 import { prisma, Prisma } from "@cayena/database";
 import { calcularEstadoAvance } from "@cayena/shared";
 import { enviarPushAUsuario } from "./push";
+import {
+  DIA_LIMITE_INFORME,
+  DIAS_ANTICIPACION_INFORME,
+  DIAS_INACTIVIDAD_SECRETARIA,
+  estaInactiva,
+  periodoAnterior,
+  tieneInformeDelPeriodo,
+} from "./saludSecretaria";
 
 const DIAS_SIN_AVANCE = 14;
 const DIAS_ANTI_SPAM = 7;
-// Umbral de inactividad a nivel de secretaría completa (más laxo que el de
-// una meta puntual: una secretaría entera se considera "dormida" con más
-// margen que un solo indicador estancado).
-const DIAS_INACTIVIDAD_SECRETARIA = 30;
-// Día del mes a partir del cual se exige el informe del mes anterior.
-const DIA_LIMITE_INFORME = 10;
 
 async function yaAlertadoRecientemente(titulo: string): Promise<boolean> {
   const desde = new Date(Date.now() - DIAS_ANTI_SPAM * 24 * 3600 * 1000);
@@ -162,16 +164,42 @@ export async function verificarEstancamientoMetas() {
     }
   }
 
+  alertasGeneradas += await verificarRecordatorioInforme();
   alertasGeneradas += await verificarInformesPendientes();
   alertasGeneradas += await verificarSecretariasInactivas();
 
   return alertasGeneradas;
 }
 
-function periodoAnterior(): string {
-  const ahora = new Date();
-  const mesAnterior = new Date(ahora.getFullYear(), ahora.getMonth() - 1, 1);
-  return `${mesAnterior.getFullYear()}-${String(mesAnterior.getMonth() + 1).padStart(2, "0")}`;
+// Recordatorio PROACTIVO (antes de que el informe quede atrasado): entre
+// (DIA_LIMITE_INFORME - DIAS_ANTICIPACION_INFORME) y DIA_LIMITE_INFORME,
+// avisa que se acerca la fecha si el informe del mes anterior todavía no
+// se subió — distinto de verificarInformesPendientes, que solo avisa DESPUÉS
+// de vencido. Ambos son mutuamente excluyentes por rango de días, así que
+// nunca duplican aviso el mismo día.
+async function verificarRecordatorioInforme(): Promise<number> {
+  const dia = new Date().getDate();
+  if (dia < DIA_LIMITE_INFORME - DIAS_ANTICIPACION_INFORME || dia >= DIA_LIMITE_INFORME) return 0;
+  const periodo = periodoAnterior();
+  const diasRestantes = DIA_LIMITE_INFORME - dia;
+  let generadas = 0;
+
+  const secretarias = await prisma.secretaria.findMany({
+    where: { titularId: { not: null } },
+    select: { id: true, nombre: true, titularId: true },
+  });
+  for (const s of secretarias) {
+    if (await tieneInformeDelPeriodo(s.id, periodo)) continue;
+    const titular = await prisma.user.findUnique({ where: { id: s.titularId! } });
+    if (!titular?.active) continue;
+    await crearAlerta(
+      `Recordatorio: informe de ${s.nombre}`,
+      `Quedan ${diasRestantes} día${diasRestantes === 1 ? "" : "s"} para subir el informe de gestión de ${periodo} de ${s.nombre}.`,
+      titular.id,
+    );
+    generadas++;
+  }
+  return generadas;
 }
 
 // Rendición de cuentas (RF nuevo): pasado el día DIA_LIMITE_INFORME del mes,
@@ -188,10 +216,7 @@ async function verificarInformesPendientes(): Promise<number> {
     select: { id: true, nombre: true, titularId: true },
   });
   for (const s of secretarias) {
-    const informe = await prisma.informeSecretaria.findUnique({
-      where: { secretariaId_periodo: { secretariaId: s.id, periodo } },
-    });
-    if (informe) continue;
+    if (await tieneInformeDelPeriodo(s.id, periodo)) continue;
     const titular = await prisma.user.findUnique({ where: { id: s.titularId! } });
     if (!titular?.active) continue;
     await crearAlerta(
@@ -209,28 +234,13 @@ async function verificarInformesPendientes(): Promise<number> {
 // chequeo de "POA estancado" de arriba (que es sobre UNA meta puntual): esto
 // detecta cuando TODA la secretaría dejó de moverse en la práctica.
 async function verificarSecretariasInactivas(): Promise<number> {
-  const limite = new Date(Date.now() - DIAS_INACTIVIDAD_SECRETARIA * 24 * 3600 * 1000);
   let generadas = 0;
 
   const secretarias = await prisma.secretaria.findMany({
     select: { id: true, nombre: true, titularId: true, createdAt: true },
   });
   for (const s of secretarias) {
-    const [ultimaActividad, ultimoGasto, ultimoDocumento, ultimoAvance, ultimoInforme] = await Promise.all([
-      prisma.actividad.findFirst({ where: { secretariaId: s.id }, orderBy: { createdAt: "desc" } }),
-      prisma.gasto.findFirst({ where: { secretariaId: s.id }, orderBy: { createdAt: "desc" } }),
-      prisma.documentoSecretaria.findFirst({ where: { secretariaId: s.id }, orderBy: { createdAt: "desc" } }),
-      prisma.avancePOA.findFirst({ where: { metaPoa: { secretariaId: s.id } }, orderBy: { fecha: "desc" } }),
-      prisma.informeSecretaria.findFirst({ where: { secretariaId: s.id }, orderBy: { createdAt: "desc" } }),
-    ]);
-    const fechas = [ultimaActividad?.createdAt, ultimoGasto?.createdAt, ultimoDocumento?.createdAt, ultimoAvance?.fecha, ultimoInforme?.createdAt].filter(
-      (f): f is Date => !!f,
-    );
-    const masReciente = fechas.length > 0 ? new Date(Math.max(...fechas.map((f) => f.getTime()))) : null;
-    // Una secretaría recién creada, sin tiempo aún de generar nada, no se
-    // alerta todavía — mismo margen que cualquier demarcación nueva.
-    if (!masReciente && s.createdAt > limite) continue;
-    if (masReciente && masReciente >= limite) continue;
+    if (!(await estaInactiva(s.id, s.createdAt))) continue;
 
     const titular = s.titularId ? await prisma.user.findUnique({ where: { id: s.titularId } }) : null;
     if (!titular?.active) continue;
