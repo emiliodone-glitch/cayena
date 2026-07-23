@@ -27,21 +27,21 @@ export type DemarcacionElectoral =
 
 const COLOR_SIN_DATO = "#e2e8f0";
 
-// Escala azul-morada, deliberadamente distinta del semáforo rojo/amarillo/
-// verde que ya usa el mapa de militantes (para no confundir "avance de meta"
-// con "participación electoral") — de claro a oscuro según el porcentaje.
-// El 0% (el estado de casi todo el mapa apenas arranca la jornada) usa un
-// tono con tinte azul ya visible en vez de casi-blanco: si no, se fundía
-// tanto con "sin dato" como con el fondo del mapa y el contorno quedaba
-// como única pista de que ahí había una demarcación.
+// Escala verde institucional (color del partido), de claro a oscuro según el
+// porcentaje. "Sin dato" se mantiene gris neutro — nunca verde — para no
+// confundirse con "0% ya reportado". Es una gradación continua de 6 pasos
+// (no 3 colores discretos como el semáforo rojo/amarillo/verde del mapa de
+// militantes), así que aunque comparte familia de color con ese semáforo el
+// significado no choca: acá el tono siempre es progresión de participación,
+// nunca un estado puntual de "meta cumplida".
 function colorParticipacion(p: number | null | undefined): string {
   if (p == null) return COLOR_SIN_DATO;
-  if (p >= 80) return "#312e81";
-  if (p >= 60) return "#4338ca";
-  if (p >= 40) return "#6366f1";
-  if (p >= 20) return "#818cf8";
-  if (p > 0) return "#a5b4fc";
-  return "#c7d2fe";
+  if (p >= 80) return "#164f22";
+  if (p >= 60) return "#1f7a34";
+  if (p >= 40) return "#4cae5c";
+  if (p >= 20) return "#6ec488";
+  if (p > 0) return "#a8e0b6";
+  return "#d6f5dd";
 }
 
 function anillosDe(f: Feature): number[][][] {
@@ -183,7 +183,7 @@ export function MapaDiaElectoral({
     layer.bindTooltip(textoEtiqueta, { permanent: true, direction: "center", className: "etiqueta-mapa", opacity: 1 });
     layer.on({
       mouseover: (e) => {
-        (e.target as L.Path).setStyle({ weight: 3, color: "#1e1b4b" });
+        (e.target as L.Path).setStyle({ weight: 3, color: "#123f1c" });
         setPanel(props);
         avisarDemarcacion(props);
       },
@@ -278,10 +278,10 @@ export function MapaDiaElectoral({
             {enVivo ? "En vivo" : "Reconectando…"}
           </span>
           <div className="flex rounded-lg border border-gray-200 bg-white p-0.5 text-xs">
-            <button onClick={() => setModoColor("propia")} className={`rounded px-2 py-1 ${modoColor === "propia" ? "bg-indigo-600 text-white" : "text-gray-500"}`}>
+            <button onClick={() => setModoColor("propia")} className={`rounded px-2 py-1 ${modoColor === "propia" ? "bg-institucional-700 text-white" : "text-gray-500"}`}>
               % propia base
             </button>
-            <button onClick={() => setModoColor("padron")} className={`rounded px-2 py-1 ${modoColor === "padron" ? "bg-indigo-600 text-white" : "text-gray-500"}`}>
+            <button onClick={() => setModoColor("padron")} className={`rounded px-2 py-1 ${modoColor === "padron" ? "bg-institucional-700 text-white" : "text-gray-500"}`}>
               % padrón
             </button>
           </div>
@@ -406,7 +406,7 @@ function dibujarCanvas(canvas: HTMLCanvasElement, datos: FeatureCollection, modo
   const py = (lat: number) => offY + (maxLat - lat) * escala;
 
   ctx.font = "700 22px system-ui, sans-serif";
-  ctx.fillStyle = "#1e1b4b";
+  ctx.fillStyle = "#123f1c";
   ctx.fillText("Día Electoral — Participación", M, 28);
   ctx.font = "12px system-ui, sans-serif";
   ctx.fillStyle = "#6b7280";
@@ -416,7 +416,7 @@ function dibujarCanvas(canvas: HTMLCanvasElement, datos: FeatureCollection, modo
     const props = f.properties as Propiedades;
     const valor = modoColor === "padron" ? props.porcentajePadron : props.porcentajePropia;
     ctx.fillStyle = colorParticipacion(valor);
-    ctx.strokeStyle = "#ffffff";
+    ctx.strokeStyle = "#94a3b8";
     ctx.lineWidth = 1;
     for (const anillo of anillosDe(f)) {
       ctx.beginPath();
