@@ -2,8 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MapContainer, GeoJSON, TileLayer, CircleMarker, Tooltip as LeafletTooltip } from "react-leaflet";
-import type { Map as LeafletMap, Layer } from "leaflet";
+import type { Map as LeafletMap, Layer, HeatLayer } from "leaflet";
 import * as L from "leaflet";
+// Efecto lateral: agrega L.heatLayer() al namespace de Leaflet — no hay
+// componente de react-leaflet para esto, así que la capa de calor se maneja
+// a mano contra el mapa (mapRef.current) en un efecto, como cualquier otro
+// plugin de Leaflet que no tiene wrapper de React.
+import "leaflet.heat";
 import type { Feature, FeatureCollection, Polygon, MultiPolygon } from "geojson";
 import { COLOR_ESTADO, type EstadoAvance } from "@cayena/shared";
 import { apiFetch, API_URL, getAccessToken } from "@/lib/api";
@@ -312,7 +317,12 @@ export function MapaMilitantes({
   const [filtros, setFiltros] = useState<FiltrosMapa>({});
   const [modoColor, setModoColor] = useState<"meta" | "electorado">("meta");
   const [verPuntos, setVerPuntos] = useState(false);
+  // "clusters" (círculos agrupados, ya existía) vs "calor" (mapa de calor
+  // real): en zonas densas como Santo Domingo los círculos se amontonan y
+  // es difícil leer la concentración real — el calor se lee mejor ahí.
+  const [modoPuntos, setModoPuntos] = useState<"clusters" | "calor">("clusters");
   const [puntos, setPuntos] = useState<Punto[]>([]);
+  const heatLayerRef = useRef<HeatLayer | null>(null);
   const [catalogo, setCatalogo] = useState<ItemCatalogo[] | null>(null);
   const [busqueda, setBusqueda] = useState("");
   const [busquedaAbierta, setBusquedaAbierta] = useState(false);
@@ -416,6 +426,50 @@ export function MapaMilitantes({
       .then(setPuntos)
       .catch(() => setPuntos([]));
   }, [verPuntos, nivel, provinciaSeleccionada, municipioSeleccionado, filtros, refreshToken]);
+
+  // Capa de mapa de calor (plugin leaflet.heat, sin wrapper de react-leaflet):
+  // se crea/actualiza/destruye a mano contra la instancia real de Leaflet.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!verPuntos || modoPuntos !== "calor") {
+      heatLayerRef.current?.remove();
+      heatLayerRef.current = null;
+      return;
+    }
+    const puntosLatLng: [number, number, number][] = puntos.map((p) => [p.lat, p.lng, 1]);
+    if (heatLayerRef.current) {
+      heatLayerRef.current.setLatLngs(puntosLatLng);
+    } else {
+      // Pane propio por encima de overlayPane (donde vive el <GeoJSON>): si
+      // no, cuando el mapa vuelve a montar el choropleth (cambio de nivel,
+      // refresco en vivo) puede insertarse en el DOM después del canvas del
+      // calor y taparlo por completo con su relleno casi opaco.
+      if (!map.getPane("heatPane")) {
+        const pane = map.createPane("heatPane");
+        pane.style.zIndex = "450";
+      }
+      heatLayerRef.current = L.heatLayer(puntosLatLng, {
+        radius: 22,
+        blur: 18,
+        maxZoom: 17,
+        pane: "heatPane",
+        // `max` bajo normaliza mejor con pocos puntos superpuestos (una
+        // zona con 3-4 militantes ya se ve "caliente" en vez de casi
+        // transparente); minOpacity da un piso de visibilidad para que un
+        // solo punto aislado no desaparezca contra el fondo del mapa.
+        max: 3,
+        minOpacity: 0.35,
+      } as L.HeatMapOptions).addTo(map);
+    }
+  }, [verPuntos, modoPuntos, puntos]);
+
+  useEffect(() => {
+    return () => {
+      heatLayerRef.current?.remove();
+      heatLayerRef.current = null;
+    };
+  }, []);
 
   // Catálogo para el buscador (una sola vez) y promotores para el filtro.
   useEffect(() => {
@@ -1299,6 +1353,24 @@ export function MapaMilitantes({
               />
               Ubicaciones
             </label>
+            {verPuntos && (
+              <div className="flex items-center gap-1 rounded-lg border border-gray-200 p-0.5 text-xs">
+                <button
+                  onClick={() => setModoPuntos("clusters")}
+                  className={`rounded-md px-2 py-1 ${modoPuntos === "clusters" ? "bg-institucional-600 text-white" : "text-gray-500"}`}
+                  title="Círculos agrupados por zona"
+                >
+                  Puntos
+                </button>
+                <button
+                  onClick={() => setModoPuntos("calor")}
+                  className={`rounded-md px-2 py-1 ${modoPuntos === "calor" ? "bg-institucional-600 text-white" : "text-gray-500"}`}
+                  title="Mapa de calor — mejor para leer concentración en zonas densas"
+                >
+                  Calor
+                </button>
+              </div>
+            )}
             <button
               onClick={exportarPNG}
               className="rounded-lg border border-institucional-600 px-2.5 py-1 text-xs font-medium text-institucional-700 hover:bg-institucional-50"
@@ -1406,6 +1478,7 @@ export function MapaMilitantes({
               />
             )}
             {verPuntos &&
+              modoPuntos === "clusters" &&
               clusters.map((c, i) => (
                 <CircleMarker
                   key={i}
