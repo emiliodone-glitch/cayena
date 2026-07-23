@@ -33,7 +33,15 @@ function tiempoRelativo(fecha: string) {
 
 export function NotificationBell() {
   const { user } = useAuth();
-  const puedeVer = user?.role === "SUPERADMIN" || user?.role === "JEFE_SECRETARIA";
+  // PROMOTOR/DIRIGENCIA se suman porque un coordinador de zona con
+  // territorio asignado puede recibir alertas de estancamiento dirigidas
+  // específicamente a él (ver GET /notificaciones, que ya filtra qué le
+  // corresponde ver a cada quien).
+  const puedeVer =
+    user?.role === "SUPERADMIN" ||
+    user?.role === "JEFE_SECRETARIA" ||
+    user?.role === "PROMOTOR" ||
+    user?.role === "DIRIGENCIA";
   const [abierto, setAbierto] = useState(false);
   const [notificaciones, setNotificaciones] = useState<Notificacion[]>([]);
   const ref = useRef<HTMLDivElement>(null);

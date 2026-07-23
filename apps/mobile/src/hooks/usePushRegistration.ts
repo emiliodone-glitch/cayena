@@ -32,11 +32,14 @@ export function usePushRegistration() {
         const tokenData = await Notifications.getExpoPushTokenAsync(
           projectId ? { projectId } : undefined,
         );
-        await apiFetch(
-          "/notificaciones/device-token",
-          { method: "POST", body: JSON.stringify({ token: tokenData.data }) },
-          false,
-        );
+        // Sin tercer argumento: si hay sesión iniciada, el token de acceso
+        // viaja en el header y el backend liga el dispositivo a ese usuario
+        // (para alertas de estancamiento dirigidas a su territorio); si no
+        // hay sesión, se registra igual mandando el header vacío.
+        await apiFetch("/notificaciones/device-token", {
+          method: "POST",
+          body: JSON.stringify({ token: tokenData.data }),
+        });
       } catch (err) {
         console.warn("No se pudo registrar el dispositivo para notificaciones push", err);
       }
