@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { Vote, ScanLine, Download, CalendarPlus, Plus } from "lucide-react";
@@ -70,14 +70,43 @@ export default function DiaElectoralPage() {
     apiFetch<Resumen>(`/dia-electoral/resumen/${eventoId}`).then(setResumen);
   }, [eventoId, refreshTicker]);
 
+  const municipioMesasRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (demarcacion?.tipo !== "municipio" || !eventoId) {
+      municipioMesasRef.current = null;
       setRecintos(null);
       return;
     }
-    apiFetch<Recinto[]>(`/dia-electoral/mesas?municipioId=${demarcacion.id}&eventoId=${eventoId}`)
-      .then(setRecintos)
-      .catch(() => setRecintos([]));
+    // El mapa dispara onDemarcacionChange en cada hover real (no solo al
+    // hacer clic), así que mover el cursor por varios municipios seguidos
+    // podía disparar una llamada de red por cada uno — de ahí la sensación
+    // de demora, además de que una respuesta vieja podía llegar después de
+    // una más nueva y pisarla. Se espera un momento a que el cursor se
+    // "asiente" en un municipio antes de pedir sus mesas, y se descarta
+    // cualquier respuesta que llegue después de haber cambiado de selección.
+    // Al cambiar de municipio (no en cada refresco en vivo del mismo) se
+    // limpian los recintos de inmediato para no dejar viendo, ni por un
+    // instante, las mesas del municipio anterior.
+    if (municipioMesasRef.current !== demarcacion.id) {
+      municipioMesasRef.current = demarcacion.id;
+      setRecintos(null);
+    }
+    let cancelado = false;
+    const demarcacionId = demarcacion.id;
+    const timer = setTimeout(() => {
+      apiFetch<Recinto[]>(`/dia-electoral/mesas?municipioId=${demarcacionId}&eventoId=${eventoId}`)
+        .then((data) => {
+          if (!cancelado) setRecintos(data);
+        })
+        .catch(() => {
+          if (!cancelado) setRecintos([]);
+        });
+    }, 300);
+    return () => {
+      cancelado = true;
+      clearTimeout(timer);
+    };
   }, [demarcacion, eventoId, refreshTicker]);
 
   // Ticker nacional en vivo: mismo canal SSE que el mapa, evento "cambio-votos".
@@ -226,6 +255,17 @@ export default function DiaElectoralPage() {
       )}
 
       {eventoId && <MapaDiaElectoral eventoId={eventoId} onDemarcacionChange={setDemarcacion} />}
+
+      {demarcacion?.tipo === "municipio" && recintos === null && (
+        <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+          <h2 className="mb-3 text-sm font-semibold text-institucional-900">Mesas de {demarcacion.nombre}</h2>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="h-12 animate-pulse rounded-lg bg-gray-100" />
+            ))}
+          </div>
+        </div>
+      )}
 
       {demarcacion?.tipo === "municipio" && recintos && (
         <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
