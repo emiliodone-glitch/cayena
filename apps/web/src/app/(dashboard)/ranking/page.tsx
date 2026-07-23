@@ -17,6 +17,7 @@ type FilaSecretaria = {
   id: string;
   nombre: string;
   titular: string | null;
+  titularActivo: boolean;
   avancePromedioObjetivos: number | null;
   informesSubidos: number;
   diasSinActividad: number | null;
@@ -188,7 +189,16 @@ export default function RankingPage() {
                         )}
                       </td>
                       <td className="px-4 py-2 font-medium">{f.nombre}</td>
-                      <td className="px-4 py-2 text-gray-500">{f.titular ?? "Vacante"}</td>
+                      <td className="px-4 py-2 text-gray-500">
+                        {f.titular ? (
+                          <>
+                            {f.titular}
+                            {!f.titularActivo && <span className="ml-1 text-xs text-amber-600">(pendiente de activar)</span>}
+                          </>
+                        ) : (
+                          "Vacante"
+                        )}
+                      </td>
                       <td className="px-4 py-2 text-gray-500">
                         {f.avancePromedioObjetivos != null ? `${f.avancePromedioObjetivos}%` : "—"}
                       </td>

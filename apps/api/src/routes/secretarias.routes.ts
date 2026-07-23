@@ -90,7 +90,12 @@ secretariasRouter.get(
         return {
           id: s.id,
           nombre: s.nombre,
-          titular: s.titular?.active ? s.titular.nombre : null,
+          // El nombre del titular se muestra siempre que esté designado —
+          // "inactivo" (todavía no activó su cuenta) no es lo mismo que
+          // "vacante" (nadie designado); el frontend distingue ambos casos
+          // con titularActivo.
+          titular: s.titular?.nombre ?? null,
+          titularActivo: s.titular?.active ?? false,
           avancePromedioObjetivos: avancePromedio,
           informesSubidos: s.informes.length,
           diasSinActividad,
