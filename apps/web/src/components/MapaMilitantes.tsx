@@ -645,11 +645,15 @@ export function MapaMilitantes({
     return {
       fillColor: fill,
       fillOpacity: 0.75,
+      // Antes las demarcaciones "estancadas" (sin registros nuevos en 14
+      // días y meta sin cumplir) llevaban un borde punteado rojo oscuro,
+      // pero como en la práctica suele estar casi todo el mapa en ese
+      // estado, el punteado terminaba pareciendo textura/ruido sobre el
+      // relleno en vez de una señal útil. El borde queda siempre sólido
+      // blanco; el dato de "estancada" se sigue mostrando en el badge del
+      // panel al pasar el cursor o hacer clic.
       color: "#ffffff",
       weight: 1.2,
-      // Demarcación estancada (sin registros nuevos en 14 días y meta sin
-      // cumplir): borde punteado rojo oscuro para llamar la atención.
-      ...(props?.estancada ? { dashArray: "5 4", color: "#991b1b", weight: 1.6 } : {}),
     };
   }
 
@@ -1270,7 +1274,7 @@ export function MapaMilitantes({
             </span>
             {conteosLeyenda.estancadas > 0 && (
               <span className="flex items-center gap-1">
-                <span className="h-3 w-3 rounded-sm border border-dashed border-red-800" /> Estancadas
+                <span className="text-[10px] font-bold text-red-600">⚠</span> Estancadas
                 <span className="font-semibold text-red-700">{conteosLeyenda.estancadas}</span>
               </span>
             )}
