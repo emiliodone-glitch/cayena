@@ -1468,9 +1468,16 @@ export function MapaMilitantes({
             zoomControl={!compacto}
             attributionControl={!compacto}
           >
+            {/* Basemap sin etiquetas propias (CartoDB Positron) en vez del OSM
+                estándar: el OSM completo trae nombres de lugares, carreteras y
+                fronteras de Haití que competían visualmente con las etiquetas
+                y el relleno de color de las propias demarcaciones — resultaba
+                en ruido, sobre todo en la vista nacional donde el mapa se ve
+                chico. Este basemap es deliberadamente pálido y sin texto para
+                que el choropleth (el dato real) sea lo único que resalte. */}
             <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+              url="https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png"
             />
             {geo && (
               <GeoJSON
