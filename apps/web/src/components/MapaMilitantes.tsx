@@ -634,6 +634,13 @@ export function MapaMilitantes({
       setProvinciaSeleccionada({ id: props.id, nombre: props.nombre });
       setNivel("municipios");
     } else if (nivel === "municipios") {
+      // En modo "% Electorado" no hay datos de electores JCE a nivel de
+      // distrito municipal (el padrón solo llega hasta municipio) — bajar un
+      // nivel más solo mostraría polígonos grises sin comparación posible, y
+      // además perdería de vista la comparación del municipio que sí tenía
+      // datos. Por eso en este modo el clic solo selecciona el municipio
+      // (el panel ya quedó fijado arriba) sin cambiar de nivel.
+      if (modoColorRef.current === "electorado") return;
       setMunicipioSeleccionado({ id: props.id, nombre: props.nombre });
       setNivel("distritos");
     }
