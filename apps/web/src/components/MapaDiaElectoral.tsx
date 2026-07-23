@@ -224,8 +224,20 @@ export function MapaDiaElectoral({
   function volverAMunicipios() {
     setNivel("municipios");
     setMunicipioSeleccionado(null);
-    setPanel(null);
-    if (provinciaSeleccionada) onDemarcacionChange?.({ tipo: "provincia", id: provinciaSeleccionada.id, nombre: provinciaSeleccionada.nombre });
+    // Al volver desde un distrito a la vista de municipios, re-cargar el
+    // resumen de la provincia (incluye electores del padrón) en vez de
+    // limpiar el panel — antes quedaba en blanco hasta que el cursor pasara
+    // de nuevo sobre un municipio puntual.
+    if (provinciaSeleccionada) {
+      const { id, nombre } = provinciaSeleccionada;
+      onDemarcacionChange?.({ tipo: "provincia", id, nombre });
+      apiFetch<Propiedades>(`/dia-electoral/provincias/${id}?eventoId=${eventoId}`)
+        .then((r) => setPanel(r))
+        .catch(() => setPanel(null));
+    } else {
+      setPanel(null);
+      onDemarcacionChange?.(null);
+    }
   }
 
   useEffect(() => {

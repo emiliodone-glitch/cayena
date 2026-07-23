@@ -228,6 +228,28 @@ diaElectoralRouter.get(
   }),
 );
 
+// GET /dia-electoral/provincias/:provinciaId — resumen puntual de una sola
+// provincia (mismo patrón que /geo/provincias/:id): lo usa el panel del mapa
+// al volver atrás por el breadcrumb, donde no hay un feature recién clicado
+// del que tomar los datos.
+diaElectoralRouter.get(
+  "/provincias/:provinciaId",
+  asyncRoute(async (req, res) => {
+    const { provinciaId } = req.params;
+    const { eventoId } = z.object({ eventoId: z.string() }).parse(req.query);
+    const alcanceUsuario = await resolverAlcance(req.user!);
+    if (!puedeVerProvincia(alcanceUsuario, provinciaId)) throw new HttpError(403, "No tienes acceso a esta provincia");
+
+    const provincia = await prisma.provincia.findUniqueOrThrow({ where: { id: provinciaId } });
+    const stats = await statsVotos("provinciaId", eventoId, { provinciaId });
+    res.json({
+      id: provincia.id,
+      nombre: provincia.nombre,
+      ...propsVotoDemarcacion(provinciaId, provincia.electores, stats),
+    });
+  }),
+);
+
 diaElectoralRouter.get(
   "/provincias/:provinciaId/municipios",
   asyncRoute(async (req, res) => {
