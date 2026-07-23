@@ -9,6 +9,10 @@ function TabIcon({ symbol }: { symbol: string }) {
 export default function TabsLayout() {
   const { user } = useAuth();
   const esDirigencia = user?.role === "DIRIGENCIA" || user?.role === "SUPERADMIN";
+  // Cualquier rol de staff (no un simple MILITANTE autorregistrado) puede
+  // ser coordinador de zona y necesita consultar su territorio desde el
+  // teléfono, no solo desde el back office web.
+  const esStaff = !!user && user.role !== "MILITANTE";
 
   return (
     <Tabs
@@ -25,6 +29,14 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="feed"
         options={{ title: "Feed", tabBarIcon: () => <TabIcon symbol="📰" /> }}
+      />
+      <Tabs.Screen
+        name="mapa-militantes"
+        options={{
+          title: "Mi Zona",
+          tabBarIcon: () => <TabIcon symbol="📍" />,
+          href: esStaff ? undefined : null,
+        }}
       />
       <Tabs.Screen
         name="unirme"
