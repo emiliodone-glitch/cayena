@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import { FotoUploader } from "@/components/FotoUploader";
+import { UbicacionInput } from "@/components/UbicacionInput";
 
 type Lista = { id: string; nombre: string }[];
 
@@ -28,9 +29,19 @@ export type ObraExistente = {
   municipioId: string;
   lat: number;
   lng: number;
+  direccion: string | null;
+  fechaInauguracion: string | null;
+  inversion: string | null;
+  beneficiarios: string | null;
   publicada: boolean;
   fotos: string[];
+  fotosAntes: string[];
 };
+
+function aFechaInput(iso: string | null) {
+  if (!iso) return "";
+  return iso.slice(0, 10);
+}
 
 export function ObraForm({
   obra,
@@ -50,11 +61,16 @@ export function ObraForm({
     categoria: obra?.categoria ?? "EDUCACION",
     provinciaId: obra?.provinciaId ?? "",
     municipioId: obra?.municipioId ?? "",
+    direccion: obra?.direccion ?? "",
     lat: String(obra?.lat ?? "18.4861"),
     lng: String(obra?.lng ?? "-69.9312"),
+    fechaInauguracion: aFechaInput(obra?.fechaInauguracion ?? null),
+    inversion: obra?.inversion ?? "",
+    beneficiarios: obra?.beneficiarios ?? "",
     publicada: obra?.publicada ?? false,
   });
   const [fotos, setFotos] = useState<string[]>(obra?.fotos ?? []);
+  const [fotosAntes, setFotosAntes] = useState<string[]>(obra?.fotosAntes ?? []);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -72,7 +88,17 @@ export function ObraForm({
     setError(null);
     setSubmitting(true);
     try {
-      const body = { ...form, lat: Number(form.lat), lng: Number(form.lng), fotos };
+      const body = {
+        ...form,
+        lat: Number(form.lat),
+        lng: Number(form.lng),
+        inversion: form.inversion ? Number(form.inversion) : undefined,
+        fechaInauguracion: form.fechaInauguracion || undefined,
+        direccion: form.direccion || undefined,
+        beneficiarios: form.beneficiarios || undefined,
+        fotos,
+        fotosAntes,
+      };
       if (obra) {
         await apiFetch(`/obras/${obra.id}`, { method: "PATCH", body: JSON.stringify(body) });
         toast("Obra actualizada");
@@ -137,6 +163,17 @@ export function ObraForm({
           </select>
         </label>
       </div>
+      <label className="block">
+        <span className="mb-1 block text-sm font-medium text-gray-700">Dirección / punto de referencia</span>
+        <UbicacionInput
+          value={form.direccion}
+          lat={Number(form.lat) || null}
+          lng={Number(form.lng) || null}
+          onChange={({ ubicacion, lat, lng }) =>
+            setForm({ ...form, direccion: ubicacion, lat: lat != null ? String(lat) : form.lat, lng: lng != null ? String(lng) : form.lng })
+          }
+        />
+      </label>
       <div className="grid grid-cols-2 gap-4">
         <label className="block">
           <span className="mb-1 block text-sm font-medium text-gray-700">Latitud</span>
@@ -147,8 +184,44 @@ export function ObraForm({
           <input required className="input" value={form.lng} onChange={(e) => setForm({ ...form, lng: e.target.value })} />
         </label>
       </div>
+      <div className="grid grid-cols-2 gap-4">
+        <label className="block">
+          <span className="mb-1 block text-sm font-medium text-gray-700">Fecha de inauguración</span>
+          <input
+            type="date"
+            className="input"
+            value={form.fechaInauguracion}
+            onChange={(e) => setForm({ ...form, fechaInauguracion: e.target.value })}
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-sm font-medium text-gray-700">Inversión (RD$)</span>
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            className="input"
+            placeholder="Sin definir"
+            value={form.inversion}
+            onChange={(e) => setForm({ ...form, inversion: e.target.value })}
+          />
+        </label>
+      </div>
       <label className="block">
-        <span className="mb-1 block text-sm font-medium text-gray-700">Fotos</span>
+        <span className="mb-1 block text-sm font-medium text-gray-700">Beneficiarios</span>
+        <input
+          className="input"
+          placeholder="Ej. 500 familias del sector"
+          value={form.beneficiarios}
+          onChange={(e) => setForm({ ...form, beneficiarios: e.target.value })}
+        />
+      </label>
+      <label className="block">
+        <span className="mb-1 block text-sm font-medium text-gray-700">Fotos: antes</span>
+        <FotoUploader fotos={fotosAntes} onChange={setFotosAntes} />
+      </label>
+      <label className="block">
+        <span className="mb-1 block text-sm font-medium text-gray-700">Fotos: después / actual</span>
         <FotoUploader fotos={fotos} onChange={setFotos} />
       </label>
       <label className="flex items-center gap-2 text-sm text-gray-700">

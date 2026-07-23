@@ -7,12 +7,19 @@ import { enviarPushATodos } from "../lib/push";
 
 export const obrasRouter = Router();
 
-// RF-23/RF-24: mapa público de obras — sin auth, usado por la app móvil.
+// RF-23/RF-24: mapa público de obras — sin auth, usado por la app móvil y el
+// catálogo del panel de transparencia (con los mismos filtros que el back office).
 obrasRouter.get(
   "/publicas",
-  asyncRoute(async (_req, res) => {
+  asyncRoute(async (req, res) => {
+    const { provinciaId, categoria, anio } = req.query as { provinciaId?: string; categoria?: string; anio?: string };
     const obras = await prisma.obra.findMany({
-      where: { publicada: true },
+      where: {
+        publicada: true,
+        ...(provinciaId ? { provinciaId } : {}),
+        ...(categoria ? { categoria: categoria as CategoriaObra } : {}),
+        ...filtroAnio(anio),
+      },
       include: { provincia: true, municipio: true },
       orderBy: { createdAt: "desc" },
     });
@@ -35,14 +42,30 @@ obrasRouter.get(
 
 obrasRouter.use(requireAuth);
 
+// Un mismo año puede referirse a la fecha de inauguración (si se cargó) o,
+// para obras antiguas sin ese dato, al año en que se registró en el sistema
+// — así el filtro no deja fuera obras cargadas antes de tener este campo.
+function filtroAnio(anio?: string) {
+  if (!anio) return {};
+  const inicio = new Date(Number(anio), 0, 1);
+  const fin = new Date(Number(anio) + 1, 0, 1);
+  return {
+    OR: [
+      { fechaInauguracion: { gte: inicio, lt: fin } },
+      { fechaInauguracion: null, createdAt: { gte: inicio, lt: fin } },
+    ],
+  };
+}
+
 obrasRouter.get(
   "/",
   asyncRoute(async (req, res) => {
-    const { provinciaId, categoria } = req.query as { provinciaId?: string; categoria?: string };
+    const { provinciaId, categoria, anio } = req.query as { provinciaId?: string; categoria?: string; anio?: string };
     const obras = await prisma.obra.findMany({
       where: {
         ...(provinciaId ? { provinciaId } : {}),
         ...(categoria ? { categoria: categoria as CategoriaObra } : {}),
+        ...filtroAnio(anio),
       },
       include: { provincia: true, municipio: true },
       orderBy: { createdAt: "desc" },
@@ -57,8 +80,13 @@ const obraSchema = z.object({
   resena: z.string().min(1),
   categoria: z.nativeEnum(CategoriaObra),
   fotos: z.array(z.string()).default([]),
+  fotosAntes: z.array(z.string()).default([]),
   lat: z.number(),
   lng: z.number(),
+  direccion: z.string().optional(),
+  fechaInauguracion: z.coerce.date().optional(),
+  inversion: z.number().optional(),
+  beneficiarios: z.string().optional(),
   provinciaId: z.string(),
   municipioId: z.string(),
   publicada: z.boolean().default(false),

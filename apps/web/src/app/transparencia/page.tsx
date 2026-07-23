@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { API_URL } from "@/lib/api";
+import { API_URL, resolveFileUrl } from "@/lib/api";
 
 type Resumen = {
   militantesTotales: number;
@@ -9,9 +9,31 @@ type Resumen = {
   porcentajeNacional: number;
   estadoNacional: "rojo" | "amarillo" | "verde";
   obrasPorCategoria: { categoria: string; total: number }[];
+  inversionTotalObras: number;
   actividadesRealizadas: number;
   finanzas: { categoria: string; tipo: "INGRESO" | "GASTO"; total: number }[];
 };
+
+type Lista = { id: string; nombre: string }[];
+
+type ObraPublica = {
+  id: string;
+  titulo: string;
+  resena: string;
+  categoria: string;
+  fotos: string[];
+  inversion: string | null;
+  fechaInauguracion: string | null;
+  beneficiarios: string | null;
+  lat: number;
+  lng: number;
+  provincia: { nombre: string };
+  municipio: { nombre: string };
+};
+
+const CATEGORIAS = ["EDUCACION", "SALUD", "VIALIDAD", "VIVIENDA", "DEPORTE", "AGUA_SANEAMIENTO", "ELECTRICIDAD", "SEGURIDAD", "OTRA"];
+const ANIO_ACTUAL = new Date().getFullYear();
+const ANIOS = Array.from({ length: 8 }, (_, i) => ANIO_ACTUAL - i);
 
 type ProvinciaResumen = {
   id: string;
@@ -39,12 +61,30 @@ export default function TransparenciaPage() {
   const [resumen, setResumen] = useState<Resumen | null>(null);
   const [provincias, setProvincias] = useState<ProvinciaResumen[]>([]);
   const [secretarias, setSecretarias] = useState<SecretariaResumen[]>([]);
+  const [listaProvincias, setListaProvincias] = useState<Lista>([]);
+  const [obras, setObras] = useState<ObraPublica[] | null>(null);
+  const [categoriaFiltro, setCategoriaFiltro] = useState("");
+  const [provinciaFiltro, setProvinciaFiltro] = useState("");
+  const [anioFiltro, setAnioFiltro] = useState("");
 
   useEffect(() => {
     fetch(`${API_URL}/transparencia/resumen`).then((r) => r.json()).then(setResumen);
     fetch(`${API_URL}/transparencia/provincias`).then((r) => r.json()).then(setProvincias);
     fetch(`${API_URL}/transparencia/secretarias`).then((r) => r.json()).then(setSecretarias);
+    fetch(`${API_URL}/geo/lista/provincias`).then((r) => r.json()).then(setListaProvincias);
   }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (categoriaFiltro) params.set("categoria", categoriaFiltro);
+    if (provinciaFiltro) params.set("provinciaId", provinciaFiltro);
+    if (anioFiltro) params.set("anio", anioFiltro);
+    const qs = params.toString();
+    fetch(`${API_URL}/obras/publicas${qs ? `?${qs}` : ""}`)
+      .then((r) => r.json())
+      .then(setObras)
+      .catch(() => setObras([]));
+  }, [categoriaFiltro, provinciaFiltro, anioFiltro]);
 
   const gastoTotal = resumen?.finanzas.filter((f) => f.tipo === "GASTO").reduce((s, f) => s + f.total, 0) ?? 0;
   const ingresoTotal = resumen?.finanzas.filter((f) => f.tipo === "INGRESO").reduce((s, f) => s + f.total, 0) ?? 0;
@@ -67,6 +107,13 @@ export default function TransparenciaPage() {
           <Kpi label="Obras registradas" value={resumen?.obrasPorCategoria.reduce((s, o) => s + o.total, 0).toString() ?? "—"} />
         </div>
 
+        {!!resumen?.inversionTotalObras && (
+          <div className="mb-8 rounded-xl border border-institucional-200 bg-institucional-50 p-5 text-center">
+            <div className="text-2xl font-bold text-institucional-800">{fmtMoney.format(resumen.inversionTotalObras)}</div>
+            <div className="text-xs text-institucional-700">Inversión total en obras de gobierno realizadas</div>
+          </div>
+        )}
+
         <div className="mb-8 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
           <h2 className="mb-4 text-sm font-semibold text-gray-700">Avance por provincia</h2>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -82,8 +129,8 @@ export default function TransparenciaPage() {
         </div>
 
         <div className="mb-8 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="mb-4 text-sm font-semibold text-gray-700">Obras por categoría</h2>
-          <div className="space-y-2">
+          <h2 className="mb-1 text-sm font-semibold text-gray-700">Obras por categoría</h2>
+          <div className="mb-4 space-y-2">
             {resumen?.obrasPorCategoria.map((o) => (
               <div key={o.categoria} className="flex items-center justify-between text-sm">
                 <span className="capitalize text-gray-600">{o.categoria.toLowerCase().replace("_", " ")}</span>
@@ -92,6 +139,72 @@ export default function TransparenciaPage() {
             ))}
             {resumen && resumen.obrasPorCategoria.length === 0 && (
               <p className="text-sm text-gray-400">Aún no hay obras publicadas.</p>
+            )}
+          </div>
+
+          <h3 className="mb-3 text-sm font-semibold text-gray-700">Catálogo de obras realizadas</h3>
+          <div className="mb-4 flex flex-wrap gap-2">
+            <select
+              value={categoriaFiltro}
+              onChange={(e) => setCategoriaFiltro(e.target.value)}
+              className="rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-institucional-600 focus:outline-none"
+            >
+              <option value="">Todas las categorías</option>
+              {CATEGORIAS.map((c) => (
+                <option key={c} value={c}>{c.toLowerCase().replace("_", " ")}</option>
+              ))}
+            </select>
+            <select
+              value={provinciaFiltro}
+              onChange={(e) => setProvinciaFiltro(e.target.value)}
+              className="rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-institucional-600 focus:outline-none"
+            >
+              <option value="">Todas las provincias</option>
+              {listaProvincias.map((p) => (
+                <option key={p.id} value={p.id}>{p.nombre}</option>
+              ))}
+            </select>
+            <select
+              value={anioFiltro}
+              onChange={(e) => setAnioFiltro(e.target.value)}
+              className="rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-institucional-600 focus:outline-none"
+            >
+              <option value="">Todos los años</option>
+              {ANIOS.map((a) => (
+                <option key={a} value={a}>{a}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            {obras?.map((o) => (
+              <div key={o.id} className="overflow-hidden rounded-lg border border-gray-100">
+                {o.fotos[0] ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={resolveFileUrl(o.fotos[0])} alt="" className="h-36 w-full object-cover" />
+                ) : (
+                  <div className="h-36 w-full bg-institucional-50" />
+                )}
+                <div className="p-3">
+                  <span className="text-xs font-semibold uppercase text-institucional-600">
+                    {o.categoria.toLowerCase().replace("_", " ")}
+                  </span>
+                  <div className="font-semibold text-institucional-900">{o.titulo}</div>
+                  <p className="mt-1 line-clamp-2 text-xs text-gray-500">{o.resena}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+                    <span>📍 {o.municipio.nombre}, {o.provincia.nombre}</span>
+                    {o.fechaInauguracion && <span>{new Date(o.fechaInauguracion).toLocaleDateString("es-DO")}</span>}
+                  </div>
+                  {o.inversion != null && (
+                    <div className="mt-1 text-xs font-semibold text-institucional-700">
+                      Inversión: {fmtMoney.format(Number(o.inversion))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+            {obras && obras.length === 0 && (
+              <p className="col-span-full text-sm text-gray-400">No hay obras que coincidan con estos filtros.</p>
             )}
           </div>
         </div>

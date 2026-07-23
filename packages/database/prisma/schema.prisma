@@ -371,9 +371,22 @@ model Obra {
   titulo    String
   resena    String
   categoria CategoriaObra
-  fotos     String[]
-  lat       Float
-  lng       Float
+  // Fotos "después"/estado actual — el nombre se mantiene por compatibilidad
+  // con datos ya cargados; fotosAntes es la galería nueva de comparación.
+  fotos      String[]
+  fotosAntes String[] @default([])
+  lat        Float
+  lng        Float
+  // Referencia de dirección en texto libre (ej. "Calle Duarte esq. Mella"),
+  // buscada con el mismo autocompletado de lugares que Actividades — separada
+  // de provincia/municipio, que siguen siendo la demarcación oficial.
+  direccion String?
+
+  // Datos de una obra ya concluida (RF: catálogo de logros de gobierno) — a
+  // diferencia de Actividades, esto no es un tracker de obras en curso.
+  fechaInauguracion DateTime?
+  inversion         Decimal?  @db.Decimal(14, 2)
+  beneficiarios     String?
 
   provinciaId String
   provincia   Provincia @relation(fields: [provinciaId], references: [id])

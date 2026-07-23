@@ -10,7 +10,7 @@ export const transparenciaRouter = Router();
 transparenciaRouter.get(
   "/resumen",
   asyncRoute(async (_req, res) => {
-    const [militantesTotales, obrasPorCategoria, metasNacionales, gastosPorCategoria, actividadesRealizadas] =
+    const [militantesTotales, obrasPorCategoria, inversionObras, metasNacionales, gastosPorCategoria, actividadesRealizadas] =
       await Promise.all([
         prisma.militante.count(),
         prisma.obra.groupBy({
@@ -18,6 +18,7 @@ transparenciaRouter.get(
           where: { publicada: true },
           _count: { _all: true },
         }),
+        prisma.obra.aggregate({ where: { publicada: true }, _sum: { inversion: true } }),
         prisma.metaMilitantes.findMany({ where: { provinciaId: { not: null }, vigenciaHasta: null } }),
         prisma.gasto.groupBy({
           by: ["categoria", "tipo"],
@@ -34,6 +35,7 @@ transparenciaRouter.get(
       porcentajeNacional: calcularPorcentaje(militantesTotales, metaNacional),
       estadoNacional: calcularEstadoAvance(militantesTotales, metaNacional),
       obrasPorCategoria: obrasPorCategoria.map((o) => ({ categoria: o.categoria, total: o._count._all })),
+      inversionTotalObras: Number(inversionObras._sum.inversion ?? 0),
       actividadesRealizadas,
       finanzas: gastosPorCategoria.map((g) => ({
         categoria: g.categoria,

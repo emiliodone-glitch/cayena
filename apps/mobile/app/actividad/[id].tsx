@@ -1,23 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Image, Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { apiFetch, API_URL } from "@/api/client";
 import { MI_MILITANTE_ID_KEY } from "@/lib/carnet";
+import { abrirComoLlegar } from "@/lib/mapas";
 
 function resolveUrl(url: string) {
   return url.startsWith("http") ? url : `${API_URL}${url}`;
-}
-
-function abrirComoLlegar(lat: number, lng: number, etiqueta: string) {
-  const url = Platform.select({
-    ios: `maps:0,0?q=${etiqueta}@${lat},${lng}`,
-    android: `geo:0,0?q=${lat},${lng}(${etiqueta})`,
-    default: `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`,
-  });
-  Linking.openURL(url!).catch(() => {
-    Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`);
-  });
 }
 
 type Actividad = {
