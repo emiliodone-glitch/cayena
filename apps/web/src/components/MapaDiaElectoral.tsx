@@ -258,12 +258,17 @@ export function MapaDiaElectoral({
       if (props.id) onDemarcacionChange({ tipo: "provincia", id: props.id, nombre: props.nombre });
     } else if (nivel === "municipios") {
       if (props.id) onDemarcacionChange({ tipo: "municipio", id: props.id, nombre: props.nombre });
+    } else if (props.id) {
+      // Distrito municipal real (RF nuevo): Localidad ya sabe a qué
+      // distrito pertenece (ver migración de Localidad.distritoMunicipalId),
+      // así que se avisa el distrito puntual bajo el cursor y la página
+      // filtra las mesas por ÉL, no por todo el municipio.
+      onDemarcacionChange({ tipo: "distrito", id: props.id, nombre: props.nombre });
     } else if (municipioSeleccionado) {
-      // Las mesas electorales solo existen agrupadas por municipio, no por
-      // distrito municipal — se sigue avisando el municipio padre (no el
-      // distrito puntual bajo el cursor) para que el panel de "Mesas de..."
-      // de la página no desaparezca al entrar o pasar el mouse por sus
-      // distritos, tal como ya se mostraba al nivel de municipios.
+      // El polígono "cabecera" (lo no repartido en ningún distrito
+      // resuelto) no tiene un distrito real con el que filtrar — se avisa
+      // el municipio padre para que el panel siga mostrando algo en vez de
+      // desaparecer.
       onDemarcacionChange({ tipo: "municipio", id: municipioSeleccionado.id, nombre: municipioSeleccionado.nombre });
     }
   }

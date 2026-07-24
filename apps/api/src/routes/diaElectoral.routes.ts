@@ -588,14 +588,32 @@ diaElectoralRouter.get(
 diaElectoralRouter.get(
   "/mesas",
   asyncRoute(async (req, res) => {
-    const { municipioId, provinciaId, eventoId } = z
-      .object({ municipioId: z.string().optional(), provinciaId: z.string().optional(), eventoId: z.string() })
-      .refine((v) => v.municipioId || v.provinciaId, "Se requiere municipioId o provinciaId")
+    const { municipioId, provinciaId, distritoMunicipalId, eventoId } = z
+      .object({
+        municipioId: z.string().optional(),
+        provinciaId: z.string().optional(),
+        distritoMunicipalId: z.string().optional(),
+        eventoId: z.string(),
+      })
+      .refine((v) => v.municipioId || v.provinciaId || v.distritoMunicipalId, "Se requiere municipioId, provinciaId o distritoMunicipalId")
       .parse(req.query);
     const alcanceUsuario = await resolverAlcance(req.user!);
 
-    let whereLocalidad: { municipioId: string } | { municipio: { provinciaId: string } };
-    if (municipioId) {
+    let whereLocalidad: { municipioId: string } | { municipio: { provinciaId: string } } | { distritoMunicipalId: string };
+    if (distritoMunicipalId) {
+      // Filtro real por distrito municipal (RF nuevo): antes Localidad no
+      // tenía este dato, así que entrar a un distrito específico solo
+      // podía mostrar las mesas de TODO el municipio — ver migración
+      // 20260724150000_localidad_distrito_municipal.
+      const distrito = await prisma.distritoMunicipal.findUniqueOrThrow({
+        where: { id: distritoMunicipalId },
+        select: { municipioId: true, municipio: { select: { provinciaId: true } } },
+      });
+      if (!puedeVerDistrito(alcanceUsuario, distritoMunicipalId, distrito.municipioId, distrito.municipio.provinciaId)) {
+        throw new HttpError(403, "No tienes acceso a este distrito");
+      }
+      whereLocalidad = { distritoMunicipalId };
+    } else if (municipioId) {
       const municipio = await prisma.municipio.findUniqueOrThrow({ where: { id: municipioId } });
       if (!puedeVerMunicipio(alcanceUsuario, municipioId, municipio.provinciaId)) {
         throw new HttpError(403, "No tienes acceso a este municipio");
@@ -709,17 +727,24 @@ diaElectoralRouter.post(
 diaElectoralRouter.get(
   "/incidencias",
   asyncRoute(async (req, res) => {
-    const { eventoId, municipioId, provinciaId } = z
-      .object({ eventoId: z.string(), municipioId: z.string().optional(), provinciaId: z.string().optional() })
+    const { eventoId, municipioId, provinciaId, distritoMunicipalId } = z
+      .object({
+        eventoId: z.string(),
+        municipioId: z.string().optional(),
+        provinciaId: z.string().optional(),
+        distritoMunicipalId: z.string().optional(),
+      })
       .parse(req.query);
     const incidencias = await prisma.incidenciaMesa.findMany({
       where: {
         eventoId,
-        ...(municipioId
-          ? { colegio: { recintoElectoral: { localidad: { municipioId } } } }
-          : provinciaId
-            ? { colegio: { recintoElectoral: { localidad: { municipio: { provinciaId } } } } }
-            : {}),
+        ...(distritoMunicipalId
+          ? { colegio: { recintoElectoral: { localidad: { distritoMunicipalId } } } }
+          : municipioId
+            ? { colegio: { recintoElectoral: { localidad: { municipioId } } } }
+            : provinciaId
+              ? { colegio: { recintoElectoral: { localidad: { municipio: { provinciaId } } } } }
+              : {}),
       },
       include: {
         reportadoPor: { select: { nombre: true } },

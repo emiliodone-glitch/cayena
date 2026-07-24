@@ -139,12 +139,13 @@ export default function DiaElectoralPage() {
   const peticionMesasRef = useRef(0);
   const abortMesasRef = useRef<AbortController | null>(null);
 
-  function cargarMesasEIncidencias(filtro: { tipo: "municipio" | "provincia"; id: string }, eventoIdActual: string) {
+  function cargarMesasEIncidencias(filtro: { tipo: "distrito" | "municipio" | "provincia"; id: string }, eventoIdActual: string) {
     abortMesasRef.current?.abort();
     const controller = new AbortController();
     abortMesasRef.current = controller;
     const idPeticion = ++peticionMesasRef.current;
-    const parametro = filtro.tipo === "municipio" ? "municipioId" : "provinciaId";
+    const parametro =
+      filtro.tipo === "distrito" ? "distritoMunicipalId" : filtro.tipo === "municipio" ? "municipioId" : "provinciaId";
     apiFetch<Recinto[]>(`/dia-electoral/mesas?${parametro}=${filtro.id}&eventoId=${eventoIdActual}`, {
       signal: controller.signal,
     })
@@ -177,13 +178,18 @@ export default function DiaElectoralPage() {
   // "cambio-votos", nacional) para traer los conteos actualizados sin que el
   // usuario tenga que mover el cursor de nuevo.
   //
-  // Se dispara tanto para "municipio" como para "provincia" (RF nuevo): el
-  // mapa ya avisa tipo:"provincia" al pasar el mouse o hacer clic a nivel
-  // nacional, y también al volver de distritos a municipios por el
-  // breadcrumb — antes esta pantalla solo reaccionaba a "municipio", así que
-  // esos casos se quedaban sin cargar nada.
+  // Se dispara para "distrito", "municipio" y "provincia" (RF nuevo): el
+  // mapa avisa tipo:"distrito" al pasar el mouse o hacer clic en un distrito
+  // municipal resuelto (filtra sus mesas de verdad, ver
+  // Localidad.distritoMunicipalId), tipo:"provincia" a nivel nacional y al
+  // volver de distritos a municipios por el breadcrumb — antes esta
+  // pantalla solo reaccionaba a "municipio", así que esos casos se
+  // quedaban sin cargar nada.
   useEffect(() => {
-    if ((demarcacion?.tipo !== "municipio" && demarcacion?.tipo !== "provincia") || !eventoId) {
+    if (
+      (demarcacion?.tipo !== "distrito" && demarcacion?.tipo !== "municipio" && demarcacion?.tipo !== "provincia") ||
+      !eventoId
+    ) {
       demarcacionMesasRef.current = null;
       setRecintos(null);
       setIncidencias(null);
@@ -415,7 +421,7 @@ export default function DiaElectoralPage() {
 
       {eventoId && <MapaDiaElectoral eventoId={eventoId} onDemarcacionChange={setDemarcacion} />}
 
-      {(demarcacion?.tipo === "municipio" || demarcacion?.tipo === "provincia") && recintos === null && (
+      {(demarcacion?.tipo === "distrito" || demarcacion?.tipo === "municipio" || demarcacion?.tipo === "provincia") && recintos === null && (
         <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
           <h2 className="mb-3 text-sm font-semibold text-institucional-900">Mesas de {demarcacion.nombre}</h2>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -426,7 +432,7 @@ export default function DiaElectoralPage() {
         </div>
       )}
 
-      {(demarcacion?.tipo === "municipio" || demarcacion?.tipo === "provincia") && recintos && (
+      {(demarcacion?.tipo === "distrito" || demarcacion?.tipo === "municipio" || demarcacion?.tipo === "provincia") && recintos && (
         <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
           <h2 className="mb-3 text-sm font-semibold text-institucional-900">Mesas de {demarcacion.nombre}</h2>
           {recintos.length === 0 ? (
@@ -456,7 +462,7 @@ export default function DiaElectoralPage() {
                             onChange={(e) => asignarResponsable(m.id, e.target.value)}
                             className="mt-1 w-full rounded border border-gray-200 bg-white px-1 py-0.5 text-[11px] text-gray-600"
                           >
-                            <option value="">Sin fiscal asignado</option>
+                            <option value="">Sin delegado asignado</option>
                             {directorio.map((d) => (
                               <option key={d.id} value={d.id}>
                                 {d.nombre}
@@ -465,7 +471,7 @@ export default function DiaElectoralPage() {
                           </select>
                         ) : (
                           <div className="mt-1 text-[11px] text-gray-400">
-                            {m.responsableNombre ? `Fiscal: ${m.responsableNombre}` : "Sin fiscal asignado"}
+                            {m.responsableNombre ? `Delegado: ${m.responsableNombre}` : "Sin delegado asignado"}
                           </div>
                         )}
 

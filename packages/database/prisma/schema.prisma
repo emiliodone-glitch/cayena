@@ -95,6 +95,7 @@ model DistritoMunicipal {
   metas              MetaMilitantes[]
   metasParticipacion MetaParticipacion[]
   responsables       User[]              @relation("ResponsableDistrito")
+  localidades        Localidad[]
 
   createdAt DateTime @default(now())
 
@@ -110,6 +111,14 @@ model Localidad {
   nombre      String
   municipioId String
   municipio   Municipio @relation(fields: [municipioId], references: [id])
+  // Distrito municipal al que pertenece (RF nuevo) — antes no existía este
+  // dato acá, así que las mesas electorales (que cuelgan de Localidad vía
+  // RecintoElectoral) solo se podían filtrar por municipio completo, nunca
+  // por un distrito puntual dentro de él. Nulo cuando todavía no se pudo
+  // inferir de qué distrito es (ver migración de backfill) — se puede
+  // completar después a mano desde el back office.
+  distritoMunicipalId String?
+  distritoMunicipal   DistritoMunicipal? @relation(fields: [distritoMunicipalId], references: [id])
 
   militantes Militante[]
   recintos   RecintoElectoral[]
@@ -118,6 +127,7 @@ model Localidad {
 
   @@unique([municipioId, nombre])
   @@index([municipioId])
+  @@index([distritoMunicipalId])
 }
 
 // Recinto electoral (local físico), vinculado a una localidad específica.
