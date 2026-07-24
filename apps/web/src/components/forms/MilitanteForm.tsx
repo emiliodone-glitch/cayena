@@ -8,28 +8,55 @@ import { useToast } from "@/components/Toast";
 type Lista = { id: string; nombre: string }[];
 type Recinto = { id: string; nombre: string; direccion: string | null };
 type Colegio = { id: string; numero: string };
-type Duplicado = { nombre: string; cedula: string; telefono: string | null };
+type Duplicado = { id: string; nombre: string; cedula: string; telefono: string | null };
 
-export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCancel: () => void }) {
+export type MilitanteAEditar = {
+  id: string;
+  nombre: string;
+  cedula: string;
+  telefono: string | null;
+  direccion: string | null;
+  provinciaId: string;
+  municipioId: string;
+  distritoMunicipalId: string | null;
+  localidadId: string | null;
+  recintoElectoralId: string | null;
+  colegioId: string | null;
+};
+
+function formDesdeMilitante(m?: MilitanteAEditar) {
+  return {
+    nombre: m?.nombre ?? "",
+    cedula: m?.cedula ?? "",
+    telefono: m?.telefono ?? "",
+    direccion: m?.direccion ?? "",
+    provinciaId: m?.provinciaId ?? "",
+    municipioId: m?.municipioId ?? "",
+    distritoMunicipalId: m?.distritoMunicipalId ?? "",
+    localidadId: m?.localidadId ?? "",
+    recintoElectoralId: m?.recintoElectoralId ?? "",
+    colegioId: m?.colegioId ?? "",
+  };
+}
+
+export function MilitanteForm({
+  militante,
+  onSaved,
+  onCancel,
+}: {
+  militante?: MilitanteAEditar;
+  onSaved: () => void;
+  onCancel: () => void;
+}) {
   const toast = useToast();
+  const editando = !!militante;
   const [provincias, setProvincias] = useState<Lista>([]);
   const [municipios, setMunicipios] = useState<Lista>([]);
   const [distritos, setDistritos] = useState<Lista>([]);
   const [localidades, setLocalidades] = useState<Lista>([]);
   const [recintos, setRecintos] = useState<Recinto[]>([]);
   const [colegios, setColegios] = useState<Colegio[]>([]);
-  const [form, setForm] = useState({
-    nombre: "",
-    cedula: "",
-    telefono: "",
-    direccion: "",
-    provinciaId: "",
-    municipioId: "",
-    distritoMunicipalId: "",
-    localidadId: "",
-    recintoElectoralId: "",
-    colegioId: "",
-  });
+  const [form, setForm] = useState(() => formDesdeMilitante(militante));
   const [duplicados, setDuplicados] = useState<Duplicado[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -99,6 +126,7 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
   const recintoSeleccionado = recintos.find((r) => r.id === form.recintoElectoralId);
 
   // RF-15: detectar posibles duplicados mientras se escribe cédula/teléfono.
+  // Al editar, el propio registro no cuenta como "duplicado de sí mismo".
   useEffect(() => {
     if (form.cedula.length < 5 && form.telefono.length < 6) {
       setDuplicados([]);
@@ -109,7 +137,7 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
       if (form.cedula.length >= 5) params.set("cedula", form.cedula);
       if (form.telefono.length >= 6) params.set("telefono", form.telefono);
       apiFetch<Duplicado[]>(`/militantes/duplicados?${params.toString()}`)
-        .then(setDuplicados)
+        .then((resultados) => setDuplicados(resultados.filter((d) => d.id !== militante?.id)))
         .catch(() => setDuplicados([]));
     }, 400);
     return () => clearTimeout(t);
@@ -120,21 +148,28 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
     setError(null);
     setSubmitting(true);
     try {
-      await apiFetch("/militantes", {
-        method: "POST",
-        body: JSON.stringify({
-          ...form,
-          distritoMunicipalId: form.distritoMunicipalId || undefined,
-          localidadId: form.localidadId || undefined,
-          recintoElectoralId: form.recintoElectoralId || undefined,
-          colegioId: form.colegioId || undefined,
-          consentimientoDatos: true,
-        }),
-      });
-      toast("Militante registrado");
+      const payload = {
+        ...form,
+        telefono: form.telefono || null,
+        direccion: form.direccion || null,
+        distritoMunicipalId: form.distritoMunicipalId || null,
+        localidadId: form.localidadId || null,
+        recintoElectoralId: form.recintoElectoralId || null,
+        colegioId: form.colegioId || null,
+      };
+      if (militante) {
+        await apiFetch(`/militantes/${militante.id}`, { method: "PATCH", body: JSON.stringify(payload) });
+        toast("Militante actualizado");
+      } else {
+        await apiFetch("/militantes", {
+          method: "POST",
+          body: JSON.stringify({ ...payload, consentimientoDatos: true }),
+        });
+        toast("Militante registrado");
+      }
       onSaved();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "No se pudo registrar el militante");
+      setError(err instanceof ApiError ? err.message : "No se pudo guardar el militante");
     } finally {
       setSubmitting(false);
     }
@@ -469,7 +504,7 @@ export function MilitanteForm({ onSaved, onCancel }: { onSaved: () => void; onCa
           disabled={submitting}
           className="flex-1 rounded-lg bg-institucional-600 px-5 py-2 text-sm font-semibold text-white hover:bg-institucional-700 disabled:opacity-60"
         >
-          {submitting ? "Guardando…" : "Registrar militante"}
+          {submitting ? "Guardando…" : editando ? "Guardar cambios" : "Registrar militante"}
         </button>
         <button
           type="button"

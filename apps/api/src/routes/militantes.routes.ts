@@ -186,6 +186,7 @@ militantesRouter.get(
         recintoElectoral: { select: { nombre: true } },
         colegio: { select: { numero: true } },
         capturadoPor: { select: { nombre: true } },
+        _count: { select: { insignias: true } },
       },
       orderBy: { createdAt: "desc" },
       take: 5000,
@@ -197,16 +198,16 @@ militantesRouter.get(
 const militanteSchema = z.object({
   nombre: z.string().min(2),
   cedula: z.string().min(5),
-  telefono: z.string().optional(),
-  direccion: z.string().optional(),
+  telefono: z.string().nullable().optional(),
+  direccion: z.string().nullable().optional(),
   provinciaId: z.string(),
   municipioId: z.string(),
-  distritoMunicipalId: z.string().optional(),
-  localidadId: z.string().optional(),
-  recintoElectoralId: z.string().optional(),
-  colegioId: z.string().optional(),
-  lat: z.number().optional(),
-  lng: z.number().optional(),
+  distritoMunicipalId: z.string().nullable().optional(),
+  localidadId: z.string().nullable().optional(),
+  recintoElectoralId: z.string().nullable().optional(),
+  colegioId: z.string().nullable().optional(),
+  lat: z.number().nullable().optional(),
+  lng: z.number().nullable().optional(),
   consentimientoDatos: z.literal(true),
 });
 
@@ -416,6 +417,125 @@ militantesRouter.get(
       take: 10,
     });
     res.json(posibles);
+  }),
+);
+
+// Editar un militante ya registrado (RF nuevo): antes no había forma de
+// corregir un typo, un teléfono mal digitado o una demarcación equivocada
+// una vez creado el registro — quedaba así para siempre.
+const militanteUpdateSchema = militanteSchema.omit({ consentimientoDatos: true }).partial();
+
+militantesRouter.patch(
+  "/:id",
+  requireRole("SUPERADMIN", "JEFE_SECRETARIA", "PROMOTOR"),
+  asyncRoute(async (req, res) => {
+    const data = militanteUpdateSchema.parse(req.body);
+    const militante = await prisma.militante.findUniqueOrThrow({ where: { id: req.params.id } });
+    const alcanceUsuario = await resolverAlcance(req.user!);
+
+    // Se valida tanto la demarcación actual como la resultante tras el cambio
+    // (por si se está moviendo el militante a otra zona): ninguna puede caer
+    // fuera del territorio asignado al usuario.
+    const demarcacionResultante = {
+      provinciaId: data.provinciaId ?? militante.provinciaId,
+      municipioId: data.municipioId ?? militante.municipioId,
+      distritoMunicipalId: data.distritoMunicipalId !== undefined ? data.distritoMunicipalId : militante.distritoMunicipalId,
+    };
+    if (!puedeGestionarMilitante(alcanceUsuario, militante) || !puedeGestionarMilitante(alcanceUsuario, demarcacionResultante)) {
+      throw new HttpError(403, "No puedes editar militantes fuera de tu territorio asignado");
+    }
+
+    if (data.cedula && data.cedula !== militante.cedula) {
+      const existente = await prisma.militante.findUnique({ where: { cedula: data.cedula } });
+      if (existente) throw new HttpError(409, "Ya existe otro registro con esa cédula");
+    }
+
+    const actualizado = await prisma.militante.update({ where: { id: req.params.id }, data });
+    emitirCambioMilitantes();
+    res.json(actualizado);
+  }),
+);
+
+// Eliminar un militante (RF nuevo) — restringido a SUPERADMIN/JEFE_SECRETARIA
+// (más sensible que crear/editar) y solo dentro del territorio asignado.
+militantesRouter.delete(
+  "/:id",
+  requireRole("SUPERADMIN", "JEFE_SECRETARIA"),
+  asyncRoute(async (req, res) => {
+    const militante = await prisma.militante.findUniqueOrThrow({ where: { id: req.params.id } });
+    const alcanceUsuario = await resolverAlcance(req.user!);
+    if (!puedeGestionarMilitante(alcanceUsuario, militante)) {
+      throw new HttpError(403, "No puedes eliminar militantes fuera de tu territorio asignado");
+    }
+    await prisma.militante.delete({ where: { id: req.params.id } });
+    emitirCambioMilitantes();
+    res.status(204).send();
+  }),
+);
+
+const fusionarSchema = z.object({ canonicoId: z.string(), duplicadoId: z.string() });
+
+// Fusionar un duplicado (RF nuevo): la detección de duplicados al crear (arriba)
+// solo avisa — para los que ya se colaron en el padrón, esto mueve todo su
+// historial (asistencias, confirmaciones de voto, insignias, device tokens y
+// puntos) al militante que se marca como el correcto, y borra el duplicado.
+// Donde hay un choque de restricción única (ej. ya confirmó la misma
+// actividad/jornada en ambos registros) se conserva la fila del canónico y la
+// del duplicado simplemente desaparece en cascada al eliminarlo.
+militantesRouter.post(
+  "/fusionar",
+  requireRole("SUPERADMIN", "JEFE_SECRETARIA"),
+  asyncRoute(async (req, res) => {
+    const { canonicoId, duplicadoId } = fusionarSchema.parse(req.body);
+    if (canonicoId === duplicadoId) throw new HttpError(400, "Selecciona dos militantes distintos para fusionar");
+
+    const [canonico, duplicado] = await Promise.all([
+      prisma.militante.findUniqueOrThrow({ where: { id: canonicoId } }),
+      prisma.militante.findUniqueOrThrow({ where: { id: duplicadoId } }),
+    ]);
+
+    const alcanceUsuario = await resolverAlcance(req.user!);
+    if (!puedeGestionarMilitante(alcanceUsuario, canonico) || !puedeGestionarMilitante(alcanceUsuario, duplicado)) {
+      throw new HttpError(403, "No puedes fusionar militantes fuera de tu territorio asignado");
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const asistenciasDuplicado = await tx.asistenciaActividad.findMany({ where: { militanteId: duplicadoId } });
+      for (const a of asistenciasDuplicado) {
+        const yaExiste = await tx.asistenciaActividad.findUnique({
+          where: { actividadId_militanteId: { actividadId: a.actividadId, militanteId: canonicoId } },
+        });
+        if (!yaExiste) await tx.asistenciaActividad.update({ where: { id: a.id }, data: { militanteId: canonicoId } });
+      }
+
+      const confirmacionesDuplicado = await tx.confirmacionVoto.findMany({ where: { militanteId: duplicadoId } });
+      for (const c of confirmacionesDuplicado) {
+        const yaExiste = await tx.confirmacionVoto.findUnique({
+          where: { eventoId_militanteId: { eventoId: c.eventoId, militanteId: canonicoId } },
+        });
+        if (!yaExiste) await tx.confirmacionVoto.update({ where: { id: c.id }, data: { militanteId: canonicoId } });
+      }
+
+      const insigniasDuplicado = await tx.militanteInsignia.findMany({ where: { militanteId: duplicadoId } });
+      for (const i of insigniasDuplicado) {
+        const yaExiste = await tx.militanteInsignia.findUnique({
+          where: { militanteId_insigniaId: { militanteId: canonicoId, insigniaId: i.insigniaId } },
+        });
+        if (!yaExiste) await tx.militanteInsignia.update({ where: { id: i.id }, data: { militanteId: canonicoId } });
+      }
+
+      await tx.deviceToken.updateMany({ where: { militanteId: duplicadoId }, data: { militanteId: canonicoId } });
+
+      await tx.militante.update({
+        where: { id: canonicoId },
+        data: { puntos: { increment: duplicado.puntos } },
+      });
+
+      await tx.militante.delete({ where: { id: duplicadoId } });
+    });
+
+    emitirCambioMilitantes();
+    res.json({ ok: true, canonicoId });
   }),
 );
 

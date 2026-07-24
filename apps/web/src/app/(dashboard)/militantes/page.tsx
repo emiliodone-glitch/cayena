@@ -3,12 +3,15 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Plus, Upload } from "lucide-react";
-import { apiFetch } from "@/lib/api";
+import { Plus, Upload, Pencil, Trash2, GitMerge, Award } from "lucide-react";
+import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useToast } from "@/components/Toast";
 import { Drawer } from "@/components/Drawer";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { TableSkeleton } from "@/components/Skeleton";
 import { MilitanteForm } from "@/components/forms/MilitanteForm";
+import { FusionarMilitante } from "@/components/forms/FusionarMilitante";
 import { MetasEditor } from "@/components/MetasEditor";
 import { ImportarMilitantesCSV } from "@/components/ImportarMilitantesCSV";
 import { DistritosMunicipales } from "@/components/DistritosMunicipales";
@@ -24,23 +27,42 @@ type MilitanteRow = {
   nombre: string;
   cedula: string;
   telefono: string | null;
+  direccion: string | null;
+  provinciaId: string;
+  municipioId: string;
+  distritoMunicipalId: string | null;
+  localidadId: string | null;
+  recintoElectoralId: string | null;
+  colegioId: string | null;
   provincia: { nombre: string };
   municipio: { nombre: string };
   localidad: { nombre: string } | null;
   recintoElectoral: { nombre: string } | null;
   colegio: { numero: string } | null;
+  capturadoPor: { nombre: string } | null;
+  origen: "BACKOFFICE" | "APP_PUBLICA";
+  puntos: number;
+  _count: { insignias: number };
   createdAt: string;
 };
 
 export default function MilitantesPage() {
   const { user } = useAuth();
+  const toast = useToast();
   const [tab, setTab] = useState<"mapa" | "metas" | "distritos">("mapa");
   const [militantes, setMilitantes] = useState<MilitanteRow[] | null>(null);
   const [q, setQ] = useState("");
   const [demarcacion, setDemarcacion] = useState<DemarcacionSeleccionada | null>(null);
   const [filtrosMapa, setFiltrosMapa] = useState<FiltrosMapa>({});
   const [drawerAbierto, setDrawerAbierto] = useState(false);
+  const [editando, setEditando] = useState<MilitanteRow | null>(null);
+  const [eliminando, setEliminando] = useState<MilitanteRow | null>(null);
+  const [eliminandoEnCurso, setEliminandoEnCurso] = useState(false);
+  const [fusionando, setFusionando] = useState<MilitanteRow | null>(null);
   const [importarAbierto, setImportarAbierto] = useState(false);
+  // Solo SUPERADMIN y JEFE_SECRETARIA pueden eliminar/fusionar (más sensible
+  // que registrar/editar) — igual que ya lo exige el backend.
+  const puedeEliminar = user?.role === "SUPERADMIN" || user?.role === "JEFE_SECRETARIA";
   // Fuerza al mapa a refrescar sus conteos/colores tras registrar o importar
   // militantes, sin perder el nivel de zoom/demarcación en el que está el mapa.
   const [refreshMapa, setRefreshMapa] = useState(0);
@@ -69,6 +91,31 @@ export default function MilitantesPage() {
   function recargarTodo() {
     cargar();
     setRefreshMapa((t) => t + 1);
+  }
+
+  function abrirNuevo() {
+    setEditando(null);
+    setDrawerAbierto(true);
+  }
+
+  function abrirEditar(m: MilitanteRow) {
+    setEditando(m);
+    setDrawerAbierto(true);
+  }
+
+  async function confirmarEliminar() {
+    if (!eliminando) return;
+    setEliminandoEnCurso(true);
+    try {
+      await apiFetch(`/militantes/${eliminando.id}`, { method: "DELETE" });
+      toast("Militante eliminado");
+      setEliminando(null);
+      recargarTodo();
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "No se pudo eliminar el militante", "error");
+    } finally {
+      setEliminandoEnCurso(false);
+    }
   }
 
   // Descarga el padrón visible (con los filtros/demarcación aplicados) a CSV.
@@ -144,7 +191,7 @@ export default function MilitantesPage() {
                 <Upload className="h-4 w-4" /> Importar CSV
               </button>
               <button
-                onClick={() => setDrawerAbierto(true)}
+                onClick={abrirNuevo}
                 className="flex items-center gap-1.5 rounded-lg bg-institucional-600 px-4 py-2 text-sm font-semibold text-white hover:bg-institucional-700"
               >
                 <Plus className="h-4 w-4" /> Registrar militante
@@ -214,7 +261,7 @@ export default function MilitantesPage() {
               </p>
             )}
             {militantes === null ? (
-              <TableSkeleton cols={8} />
+              <TableSkeleton cols={11} />
             ) : (
               <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
                 <table className="w-full text-left text-sm">
@@ -227,7 +274,10 @@ export default function MilitantesPage() {
                       <th className="px-4 py-2">Municipio</th>
                       <th className="px-4 py-2">Localidad</th>
                       <th className="px-4 py-2">Recinto / Mesa</th>
+                      <th className="px-4 py-2">Capturado por</th>
+                      <th className="px-4 py-2">Puntos</th>
                       <th className="px-4 py-2">Registrado</th>
+                      <th className="px-4 py-2 text-right">Acciones</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -244,14 +294,59 @@ export default function MilitantesPage() {
                             ? `${m.recintoElectoral.nombre}${m.colegio ? ` · Mesa ${m.colegio.numero}` : ""}`
                             : "—"}
                         </td>
+                        <td className="px-4 py-2 text-gray-500">
+                          {m.capturadoPor?.nombre ?? (m.origen === "APP_PUBLICA" ? "Auto-registro" : "—")}
+                        </td>
+                        <td className="px-4 py-2">
+                          <span className="font-medium text-gray-700">{m.puntos}</span>
+                          {m._count.insignias > 0 && (
+                            <span
+                              className="ml-1.5 inline-flex items-center gap-0.5 rounded-full bg-institucional-50 px-1.5 py-0.5 text-xs font-medium text-institucional-700"
+                              title={`${m._count.insignias} insignia${m._count.insignias === 1 ? "" : "s"}`}
+                            >
+                              <Award className="h-3 w-3" /> {m._count.insignias}
+                            </span>
+                          )}
+                        </td>
                         <td className="px-4 py-2 text-gray-400">
                           {new Date(m.createdAt).toLocaleDateString("es-DO")}
+                        </td>
+                        <td className="px-4 py-2 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            {user?.role !== "AUDITOR" && (
+                              <button
+                                onClick={() => abrirEditar(m)}
+                                title="Editar militante"
+                                className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-institucional-700"
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </button>
+                            )}
+                            {puedeEliminar && (
+                              <button
+                                onClick={() => setFusionando(m)}
+                                title="Fusionar con otro militante (duplicado)"
+                                className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-institucional-700"
+                              >
+                                <GitMerge className="h-4 w-4" />
+                              </button>
+                            )}
+                            {puedeEliminar && (
+                              <button
+                                onClick={() => setEliminando(m)}
+                                title="Eliminar militante"
+                                className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}
                     {militantes.length === 0 && (
                       <tr>
-                        <td colSpan={8} className="px-4 py-6 text-center text-gray-400">
+                        <td colSpan={11} className="px-4 py-6 text-center text-gray-400">
                           Sin resultados.
                         </td>
                       </tr>
@@ -264,14 +359,42 @@ export default function MilitantesPage() {
         </>
       )}
 
-      <Drawer open={drawerAbierto} onClose={() => setDrawerAbierto(false)} title="Registrar militante">
+      <Drawer
+        open={drawerAbierto}
+        onClose={() => setDrawerAbierto(false)}
+        title={editando ? "Editar militante" : "Registrar militante"}
+      >
         <MilitanteForm
+          militante={editando ?? undefined}
           onSaved={() => {
             setDrawerAbierto(false);
             recargarTodo();
           }}
           onCancel={() => setDrawerAbierto(false)}
         />
+      </Drawer>
+
+      <ConfirmDialog
+        open={!!eliminando}
+        title="¿Eliminar este militante?"
+        mensaje={`Se eliminará el registro de "${eliminando?.nombre}" junto con su historial de asistencias, confirmaciones de voto e insignias. Esta acción no se puede deshacer.`}
+        confirmLabel="Eliminar"
+        loading={eliminandoEnCurso}
+        onConfirm={confirmarEliminar}
+        onCancel={() => setEliminando(null)}
+      />
+
+      <Drawer open={!!fusionando} onClose={() => setFusionando(null)} title="Fusionar duplicado">
+        {fusionando && (
+          <FusionarMilitante
+            duplicado={fusionando}
+            onFusionado={() => {
+              setFusionando(null);
+              recargarTodo();
+            }}
+            onCancel={() => setFusionando(null)}
+          />
+        )}
       </Drawer>
 
       <Drawer open={importarAbierto} onClose={() => setImportarAbierto(false)} title="Importar militantes (CSV)">
