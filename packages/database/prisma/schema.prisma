@@ -234,6 +234,8 @@ model User {
   confirmacionesVotoComoFiscal ConfirmacionVoto[]           @relation("ConfirmacionVotoFiscal")
   mesasComoResponsable         Colegio[]                    @relation("ResponsableMesa")
   incidenciasReportadas        IncidenciaMesa[]             @relation("IncidenciaReportador")
+
+  @@index([secretariaId])
 }
 
 model RefreshToken {
@@ -486,6 +488,13 @@ model Militante {
   @@index([colegioId])
   @@index([cedula])
   @@index([telefono])
+  // Optimización (RF nuevo): capturadoPorId lo filtra el ranking de
+  // captación y el padrón filtrado por promotor; createdAt lo usa el
+  // dashboard en cada carga (serie diaria, conteos por período) y el
+  // filtro de fecha del padrón — sin índice, ambos forzaban un recorrido
+  // completo de la tabla de militantes en cada consulta.
+  @@index([capturadoPorId])
+  @@index([createdAt])
 }
 
 // ---------------------------------------------------------------------------

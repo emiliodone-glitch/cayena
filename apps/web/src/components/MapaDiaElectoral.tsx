@@ -134,7 +134,47 @@ export function MapaDiaElectoral({
     return () => {
       cancelado = true;
     };
-  }, [nivel, provinciaSeleccionada?.id, municipioSeleccionado?.id, eventoId, refreshVivo]);
+  }, [nivel, provinciaSeleccionada?.id, municipioSeleccionado?.id, eventoId]);
+
+  // Refresco en vivo (RF nuevo): antes este mismo efecto recargaba con CADA
+  // "cambio-votos" del SSE (nacional, no solo de la demarcación visible) sin
+  // ningún límite — en un día con muchas confirmaciones seguidas en
+  // cualquier parte del país, eso significaba pedirle al backend el
+  // choropleth completo (agregados por provincia/municipio) muchas veces
+  // por segundo, saturando la API y sintiéndose lento en toda la pantalla
+  // de Día Electoral (mapa e incluso el panel de mesas, que comparte
+  // backend). Se limita a como mucho un refresco cada 1.5s: si llegan
+  // varios "ticks" seguidos, se agrupan en uno solo al final de la espera
+  // en vez de disparar una petición por cada uno.
+  const ultimoRefrescoVivoRef = useRef(0);
+  const timerRefrescoVivoRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (refreshVivo === 0) return; // el efecto de arriba ya cubrió la carga inicial
+    const INTERVALO_MIN_MS = 1500;
+
+    function refrescar() {
+      ultimoRefrescoVivoRef.current = Date.now();
+      timerRefrescoVivoRef.current = null;
+      const ruta = construirRuta(nivel, provinciaSeleccionada?.id, municipioSeleccionado?.id, eventoId);
+      apiFetch<FeatureCollection>(ruta)
+        .then(setGeo)
+        .catch(() => {});
+    }
+
+    const transcurrido = Date.now() - ultimoRefrescoVivoRef.current;
+    if (transcurrido >= INTERVALO_MIN_MS) {
+      refrescar();
+    } else if (!timerRefrescoVivoRef.current) {
+      timerRefrescoVivoRef.current = setTimeout(refrescar, INTERVALO_MIN_MS - transcurrido);
+    }
+    return () => {
+      if (timerRefrescoVivoRef.current) {
+        clearTimeout(timerRefrescoVivoRef.current);
+        timerRefrescoVivoRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshVivo]);
 
   // Refresco en vivo: mismo canal SSE que el mapa de militantes, evento
   // "cambio-votos" en vez de "cambio-militantes".

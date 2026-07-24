@@ -51,7 +51,18 @@ export default function MilitantesPage() {
   const toast = useToast();
   const [tab, setTab] = useState<"mapa" | "metas" | "distritos">("mapa");
   const [militantes, setMilitantes] = useState<MilitanteRow[] | null>(null);
+  // El texto se separa del valor que realmente dispara la consulta (RF
+  // nuevo): sin esto, cada tecla escrita mandaba una petición al backend —
+  // con un padrón grande, tipear un nombre completo podía disparar una
+  // decena de consultas seguidas. Se espera 350ms de pausa antes de buscar.
+  const [qInput, setQInput] = useState("");
   const [q, setQ] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setQ(qInput), 350);
+    return () => clearTimeout(t);
+  }, [qInput]);
+  const [pagina, setPagina] = useState(1);
+  const POR_PAGINA = 50;
   const [demarcacion, setDemarcacion] = useState<DemarcacionSeleccionada | null>(null);
   const [filtrosMapa, setFiltrosMapa] = useState<FiltrosMapa>({});
   const [drawerAbierto, setDrawerAbierto] = useState(false);
@@ -146,7 +157,20 @@ export default function MilitantesPage() {
     URL.revokeObjectURL(a.href);
   }
 
-  useEffect(cargar, [q, demarcacion?.tipo, demarcacion?.id, filtrosMapa]);
+  useEffect(() => {
+    setPagina(1);
+    cargar();
+  }, [q, demarcacion?.tipo, demarcacion?.id, filtrosMapa]);
+
+  const totalPaginas = militantes ? Math.max(1, Math.ceil(militantes.length / POR_PAGINA)) : 1;
+  // Tras eliminar/fusionar puede que la página en la que se estaba ya no
+  // exista (ej. se borró el único registro de la última página) — se
+  // recorta a la última válida en vez de mostrar "Sin resultados" a pesar
+  // de que sí hay militantes en páginas anteriores.
+  useEffect(() => {
+    if (pagina > totalPaginas) setPagina(totalPaginas);
+  }, [pagina, totalPaginas]);
+  const militantesPagina = militantes ? militantes.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA) : [];
 
   return (
     <div>
@@ -239,8 +263,8 @@ export default function MilitantesPage() {
               </div>
               <div className="flex items-center gap-2">
                 <input
-                  value={q}
-                  onChange={(e) => setQ(e.target.value)}
+                  value={qInput}
+                  onChange={(e) => setQInput(e.target.value)}
                   placeholder="Buscar por nombre, cédula o teléfono…"
                   className="w-72 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-institucional-600 focus:outline-none"
                 />
@@ -281,7 +305,7 @@ export default function MilitantesPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {militantes.map((m) => (
+                    {militantesPagina.map((m) => (
                       <tr key={m.id}>
                         <td className="px-4 py-2">{m.nombre}</td>
                         <td className="px-4 py-2">{m.cedula}</td>
@@ -344,7 +368,7 @@ export default function MilitantesPage() {
                         </td>
                       </tr>
                     ))}
-                    {militantes.length === 0 && (
+                    {militantesPagina.length === 0 && (
                       <tr>
                         <td colSpan={11} className="px-4 py-6 text-center text-gray-400">
                           Sin resultados.
@@ -353,6 +377,33 @@ export default function MilitantesPage() {
                     )}
                   </tbody>
                 </table>
+                {militantes.length > 0 && (
+                  <div className="flex items-center justify-between border-t border-gray-100 px-4 py-2 text-xs text-gray-500">
+                    <span>
+                      Mostrando {(pagina - 1) * POR_PAGINA + 1}–{Math.min(pagina * POR_PAGINA, militantes.length)} de{" "}
+                      {militantes.length}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setPagina((p) => Math.max(1, p - 1))}
+                        disabled={pagina <= 1}
+                        className="rounded-lg border border-gray-200 px-2.5 py-1 font-medium text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Anterior
+                      </button>
+                      <span>
+                        Página {pagina} de {totalPaginas}
+                      </span>
+                      <button
+                        onClick={() => setPagina((p) => Math.min(totalPaginas, p + 1))}
+                        disabled={pagina >= totalPaginas}
+                        className="rounded-lg border border-gray-200 px-2.5 py-1 font-medium text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Siguiente
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

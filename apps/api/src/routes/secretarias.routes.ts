@@ -38,16 +38,23 @@ secretariasRouter.get(
       select: { id: true, createdAt: true, titular: { select: { active: true } } },
     });
 
-    let pendientes = 0;
-    for (const s of secretarias) {
-      // Sin titular activo nadie puede subir el informe ni se le puede
-      // avisar a nadie — no cuenta como "pendiente accionable" (mismo gate
-      // que usan las alertas automáticas antes de notificar).
-      if (!s.titular?.active) continue;
-      const informePendiente = pasoElLimite && !(await tieneInformeDelPeriodo(s.id, periodo));
-      const inactiva = await estaInactiva(s.id, s.createdAt);
-      if (informePendiente || inactiva) pendientes++;
-    }
+    // Optimización (RF nuevo): esto lo pide el Sidebar en cada navegación de
+    // un SUPERADMIN — recorrer las secretarías una por una, esperando cada
+    // consulta antes de pasar a la siguiente, sumaba una espera de red por
+    // cada una. Se evalúan todas en paralelo (son independientes entre sí).
+    const resultados = await Promise.all(
+      secretarias
+        // Sin titular activo nadie puede subir el informe ni se le puede
+        // avisar a nadie — no cuenta como "pendiente accionable" (mismo gate
+        // que usan las alertas automáticas antes de notificar).
+        .filter((s) => s.titular?.active)
+        .map(async (s) => {
+          const informePendiente = pasoElLimite && !(await tieneInformeDelPeriodo(s.id, periodo));
+          const inactiva = await estaInactiva(s.id, s.createdAt);
+          return informePendiente || inactiva;
+        }),
+    );
+    const pendientes = resultados.filter(Boolean).length;
     res.json({ pendientes });
   }),
 );
