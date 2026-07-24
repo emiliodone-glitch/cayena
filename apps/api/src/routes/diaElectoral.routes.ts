@@ -572,24 +572,44 @@ diaElectoralRouter.get(
 );
 
 // ---------------------------------------------------------------------------
-// Mesas (recinto + colegio) — filtrar mesa a mesa dentro de un municipio. Los
-// recintos/colegios no tienen polígono propio (son un punto/dirección
-// puntual, no una demarcación administrativa), así que se listan en vez de
-// sombrearse en el mapa.
+// Mesas (recinto + colegio) — filtrar mesa a mesa dentro de un municipio o de
+// TODA una provincia (RF nuevo: antes solo se podía ver municipio a
+// municipio; al pasar el mouse o hacer clic sobre una provincia entera —
+// nivel nacional, o al volver de distritos a municipios — ahora se listan
+// las mesas de todos sus municipios juntas). Los recintos/colegios no tienen
+// polígono propio (son un punto/dirección puntual, no una demarcación
+// administrativa), así que se listan en vez de sombrearse en el mapa. El
+// filtro por provincia usa la misma relación localidad -> municipio, ya
+// indexada (Localidad.municipioId, Municipio.provinciaId), así que es igual
+// de directo que el filtro por municipio — solo trae más filas porque agrupa
+// varios municipios a la vez, no porque la consulta en sí sea más lenta.
 // ---------------------------------------------------------------------------
 
 diaElectoralRouter.get(
   "/mesas",
   asyncRoute(async (req, res) => {
-    const { municipioId, eventoId } = z.object({ municipioId: z.string(), eventoId: z.string() }).parse(req.query);
-    const municipio = await prisma.municipio.findUniqueOrThrow({ where: { id: municipioId } });
+    const { municipioId, provinciaId, eventoId } = z
+      .object({ municipioId: z.string().optional(), provinciaId: z.string().optional(), eventoId: z.string() })
+      .refine((v) => v.municipioId || v.provinciaId, "Se requiere municipioId o provinciaId")
+      .parse(req.query);
     const alcanceUsuario = await resolverAlcance(req.user!);
-    if (!puedeVerMunicipio(alcanceUsuario, municipioId, municipio.provinciaId)) {
-      throw new HttpError(403, "No tienes acceso a este municipio");
+
+    let whereLocalidad: { municipioId: string } | { municipio: { provinciaId: string } };
+    if (municipioId) {
+      const municipio = await prisma.municipio.findUniqueOrThrow({ where: { id: municipioId } });
+      if (!puedeVerMunicipio(alcanceUsuario, municipioId, municipio.provinciaId)) {
+        throw new HttpError(403, "No tienes acceso a este municipio");
+      }
+      whereLocalidad = { municipioId };
+    } else {
+      if (!puedeVerProvincia(alcanceUsuario, provinciaId!)) {
+        throw new HttpError(403, "No tienes acceso a esta provincia");
+      }
+      whereLocalidad = { municipio: { provinciaId: provinciaId! } };
     }
 
     const recintos = await prisma.recintoElectoral.findMany({
-      where: { localidad: { municipioId } },
+      where: { localidad: whereLocalidad },
       include: { colegios: { include: { responsable: { select: { id: true, nombre: true } } } } },
       orderBy: { nombre: "asc" },
     });
@@ -689,11 +709,17 @@ diaElectoralRouter.post(
 diaElectoralRouter.get(
   "/incidencias",
   asyncRoute(async (req, res) => {
-    const { eventoId, municipioId } = z.object({ eventoId: z.string(), municipioId: z.string().optional() }).parse(req.query);
+    const { eventoId, municipioId, provinciaId } = z
+      .object({ eventoId: z.string(), municipioId: z.string().optional(), provinciaId: z.string().optional() })
+      .parse(req.query);
     const incidencias = await prisma.incidenciaMesa.findMany({
       where: {
         eventoId,
-        ...(municipioId ? { colegio: { recintoElectoral: { localidad: { municipioId } } } } : {}),
+        ...(municipioId
+          ? { colegio: { recintoElectoral: { localidad: { municipioId } } } }
+          : provinciaId
+            ? { colegio: { recintoElectoral: { localidad: { municipio: { provinciaId } } } } }
+            : {}),
       },
       include: {
         reportadoPor: { select: { nombre: true } },

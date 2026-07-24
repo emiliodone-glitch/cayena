@@ -124,23 +124,28 @@ export default function DiaElectoralPage() {
     apiFetch<Resumen>(`/dia-electoral/resumen/${eventoId}`).then(setResumen);
   }, [eventoId, refreshTicker]);
 
-  const municipioMesasRef = useRef<string | null>(null);
+  // Guarda "tipo:id" (p. ej. "municipio:xyz" o "provincia:abc") — con clave
+  // compuesta en vez de solo el id, un municipio y una provincia con el mismo
+  // id (no debería pasar, pero por las dudas) no se confunden entre sí.
+  const demarcacionMesasRef = useRef<string | null>(null);
   // Descarta respuestas de peticiones ya abandonadas (por cambio de
-  // municipio o por una petición más nueva), sin importar si la disparó el
-  // debounce del hover o el refresco en vivo de abajo. Además de ignorar la
-  // respuesta, se CANCELA de verdad la petición anterior (AbortController)
-  // en vez de dejarla completarse en segundo plano — al pasar el cursor por
-  // varios municipios seguidos antes de que cada uno termine de responder,
-  // esto evita ir acumulando peticiones abandonadas todavía en vuelo.
+  // municipio/provincia o por una petición más nueva), sin importar si la
+  // disparó el debounce del hover o el refresco en vivo de abajo. Además de
+  // ignorar la respuesta, se CANCELA de verdad la petición anterior
+  // (AbortController) en vez de dejarla completarse en segundo plano — al
+  // pasar el cursor por varias demarcaciones seguidas antes de que cada una
+  // termine de responder, esto evita ir acumulando peticiones abandonadas
+  // todavía en vuelo.
   const peticionMesasRef = useRef(0);
   const abortMesasRef = useRef<AbortController | null>(null);
 
-  function cargarMesasEIncidencias(municipioId: string, eventoIdActual: string) {
+  function cargarMesasEIncidencias(filtro: { tipo: "municipio" | "provincia"; id: string }, eventoIdActual: string) {
     abortMesasRef.current?.abort();
     const controller = new AbortController();
     abortMesasRef.current = controller;
     const idPeticion = ++peticionMesasRef.current;
-    apiFetch<Recinto[]>(`/dia-electoral/mesas?municipioId=${municipioId}&eventoId=${eventoIdActual}`, {
+    const parametro = filtro.tipo === "municipio" ? "municipioId" : "provinciaId";
+    apiFetch<Recinto[]>(`/dia-electoral/mesas?${parametro}=${filtro.id}&eventoId=${eventoIdActual}`, {
       signal: controller.signal,
     })
       .then((data) => {
@@ -149,7 +154,7 @@ export default function DiaElectoralPage() {
       .catch(() => {
         if (peticionMesasRef.current === idPeticion) setRecintos([]);
       });
-    apiFetch<Incidencia[]>(`/dia-electoral/incidencias?municipioId=${municipioId}&eventoId=${eventoIdActual}`, {
+    apiFetch<Incidencia[]>(`/dia-electoral/incidencias?${parametro}=${filtro.id}&eventoId=${eventoIdActual}`, {
       signal: controller.signal,
     })
       .then((data) => {
@@ -164,26 +169,33 @@ export default function DiaElectoralPage() {
   // clic) — igual que el padrón de Militantes, se pide de inmediato, sin
   // esperar ningún tiempo artificial: las peticiones en sí son rápidas
   // (~200ms), así que el retraso que sí se sentía era un debounce de 300ms
-  // que había acá antes, no la red. Pasar el cursor por varios municipios
-  // seguidos ya no acumula peticiones porque cada una cancela la anterior
+  // que había acá antes, no la red. Pasar el cursor por varias demarcaciones
+  // seguidas ya no acumula peticiones porque cada una cancela la anterior
   // (ver AbortController en cargarMesasEIncidencias) — el mismo patrón que
-  // ya usa Militantes, solo que ahí no hacía falta el abort porque su
-  // propio fetch es más liviano. También reacciona al refresco en vivo
-  // (SSE "cambio-votos", nacional) para traer los conteos actualizados sin
-  // que el usuario tenga que mover el cursor de nuevo.
+  // ya usa Militantes, solo que ahí no hacía falta el abort porque su propio
+  // fetch es más liviano. También reacciona al refresco en vivo (SSE
+  // "cambio-votos", nacional) para traer los conteos actualizados sin que el
+  // usuario tenga que mover el cursor de nuevo.
+  //
+  // Se dispara tanto para "municipio" como para "provincia" (RF nuevo): el
+  // mapa ya avisa tipo:"provincia" al pasar el mouse o hacer clic a nivel
+  // nacional, y también al volver de distritos a municipios por el
+  // breadcrumb — antes esta pantalla solo reaccionaba a "municipio", así que
+  // esos casos se quedaban sin cargar nada.
   useEffect(() => {
-    if (demarcacion?.tipo !== "municipio" || !eventoId) {
-      municipioMesasRef.current = null;
+    if ((demarcacion?.tipo !== "municipio" && demarcacion?.tipo !== "provincia") || !eventoId) {
+      demarcacionMesasRef.current = null;
       setRecintos(null);
       setIncidencias(null);
       return;
     }
-    if (municipioMesasRef.current !== demarcacion.id) {
-      municipioMesasRef.current = demarcacion.id;
+    const clave = `${demarcacion.tipo}:${demarcacion.id}`;
+    if (demarcacionMesasRef.current !== clave) {
+      demarcacionMesasRef.current = clave;
       setRecintos(null);
       setIncidencias(null);
     }
-    cargarMesasEIncidencias(demarcacion.id, eventoId);
+    cargarMesasEIncidencias({ tipo: demarcacion.tipo, id: demarcacion.id }, eventoId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [demarcacion, eventoId, refreshTicker]);
 
@@ -403,7 +415,7 @@ export default function DiaElectoralPage() {
 
       {eventoId && <MapaDiaElectoral eventoId={eventoId} onDemarcacionChange={setDemarcacion} />}
 
-      {demarcacion?.tipo === "municipio" && recintos === null && (
+      {(demarcacion?.tipo === "municipio" || demarcacion?.tipo === "provincia") && recintos === null && (
         <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
           <h2 className="mb-3 text-sm font-semibold text-institucional-900">Mesas de {demarcacion.nombre}</h2>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -414,11 +426,13 @@ export default function DiaElectoralPage() {
         </div>
       )}
 
-      {demarcacion?.tipo === "municipio" && recintos && (
+      {(demarcacion?.tipo === "municipio" || demarcacion?.tipo === "provincia") && recintos && (
         <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
           <h2 className="mb-3 text-sm font-semibold text-institucional-900">Mesas de {demarcacion.nombre}</h2>
           {recintos.length === 0 ? (
-            <p className="text-sm text-gray-400">Sin recintos electorales registrados en este municipio.</p>
+            <p className="text-sm text-gray-400">
+              Sin recintos electorales registrados en {demarcacion.tipo === "provincia" ? "esta provincia" : "este municipio"}.
+            </p>
           ) : (
             <div className="space-y-3">
               {recintos.map((r) => (
