@@ -26,9 +26,11 @@ import {
   GraduationCap,
   Church,
   Dumbbell,
+  Copy,
+  Check,
   type LucideIcon,
 } from "lucide-react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/components/Toast";
 import { Drawer } from "@/components/Drawer";
@@ -77,6 +79,12 @@ type Usuario = { id: string; nombre: string; email: string; role: string };
 
 const fmtMoney = new Intl.NumberFormat("es-DO", { style: "currency", currency: "DOP", maximumFractionDigits: 0 });
 
+// Sentinel del <select> de Titular para "registrar una persona nueva" en vez
+// de elegir entre las que ya existen — no puede chocar con un cid real.
+const NUEVO_TITULAR = "__nuevo__";
+const ROLES_TITULAR = ["JEFE_SECRETARIA", "PROMOTOR", "AUDITOR", "DIRIGENCIA"];
+const NUEVO_TITULAR_VACIO = { nombre: "", email: "", telefono: "", role: "JEFE_SECRETARIA" };
+
 export default function SecretariasPage() {
   const { user } = useAuth();
   const toast = useToast();
@@ -87,8 +95,11 @@ export default function SecretariasPage() {
   const [nombre, setNombre] = useState("");
   const [descripcion, setDescripcion] = useState("");
   const [titularId, setTitularId] = useState("");
+  const [nuevoTitular, setNuevoTitular] = useState(NUEVO_TITULAR_VACIO);
   const [presupuestoAsignado, setPresupuestoAsignado] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [invitacionLink, setInvitacionLink] = useState<string | null>(null);
+  const [invitacionCopiado, setInvitacionCopiado] = useState(false);
 
   const esSuperadmin = user?.role === "SUPERADMIN";
 
@@ -96,11 +107,13 @@ export default function SecretariasPage() {
     apiFetch<Secretaria[]>("/secretarias").then(setSecretarias);
   }
 
+  function cargarUsuarios() {
+    if (esSuperadmin) apiFetch<Usuario[]>("/usuarios").then(setUsuarios).catch(() => setUsuarios([]));
+  }
+
   useEffect(() => {
     cargar();
-    if (esSuperadmin) {
-      apiFetch<Usuario[]>("/usuarios").then(setUsuarios).catch(() => setUsuarios([]));
-    }
+    cargarUsuarios();
   }, [esSuperadmin]);
 
   function abrirNueva() {
@@ -108,6 +121,7 @@ export default function SecretariasPage() {
     setNombre("");
     setDescripcion("");
     setTitularId("");
+    setNuevoTitular(NUEVO_TITULAR_VACIO);
     setPresupuestoAsignado("");
     setDrawerAbierto(true);
   }
@@ -117,6 +131,7 @@ export default function SecretariasPage() {
     setNombre(s.nombre);
     setDescripcion(s.descripcion ?? "");
     setTitularId(s.titularId ?? "");
+    setNuevoTitular(NUEVO_TITULAR_VACIO);
     setPresupuestoAsignado(s.presupuestoAsignado ?? "");
     setDrawerAbierto(true);
   }
@@ -125,30 +140,82 @@ export default function SecretariasPage() {
     e.preventDefault();
     setSubmitting(true);
     try {
+      let titularIdFinal = titularId && titularId !== NUEVO_TITULAR ? titularId : null;
+      let nuevoUsuarioId: string | null = null;
+
+      // Registrar una persona nueva como titular (en vez de elegir entre las
+      // que ya existen): se crea la cuenta con una contraseña provisional —
+      // no importa cuál, se sobrescribe cuando la persona activa su cuenta
+      // con el link de invitación que se genera más abajo.
+      if (esSuperadmin && titularId === NUEVO_TITULAR) {
+        const nuevo = await apiFetch<{ id: string }>("/usuarios", {
+          method: "POST",
+          body: JSON.stringify({
+            nombre: nuevoTitular.nombre,
+            email: nuevoTitular.email,
+            telefono: nuevoTitular.telefono || undefined,
+            password: crypto.randomUUID(),
+            role: nuevoTitular.role,
+            secretariaId: editando?.id,
+            cargoSecretaria: editando?.id ? "Titular" : undefined,
+          }),
+        });
+        nuevoUsuarioId = nuevo.id;
+        titularIdFinal = nuevo.id;
+      }
+
       const body = {
         nombre,
         descripcion,
         ...(esSuperadmin
           ? {
-              titularId: titularId || null,
+              titularId: titularIdFinal,
               presupuestoAsignado: presupuestoAsignado ? Number(presupuestoAsignado) : null,
             }
           : {}),
       };
+
+      let secretariaId = editando?.id ?? null;
       if (editando) {
         await apiFetch(`/secretarias/${editando.id}`, { method: "PATCH", body: JSON.stringify(body) });
         toast("Secretaría actualizada");
       } else {
-        await apiFetch("/secretarias", { method: "POST", body: JSON.stringify(body) });
+        const creada = await apiFetch<{ id: string }>("/secretarias", { method: "POST", body: JSON.stringify(body) });
+        secretariaId = creada.id;
         toast("Secretaría creada");
       }
+
+      // La secretaría recién creada no existía todavía cuando se creó la
+      // persona nueva, así que solo ahora se puede ligar como miembro del equipo.
+      if (nuevoUsuarioId && !editando && secretariaId) {
+        await apiFetch(`/usuarios/${nuevoUsuarioId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ secretariaId, cargoSecretaria: "Titular" }),
+        });
+      }
+
+      if (nuevoUsuarioId) {
+        const { token } = await apiFetch<{ token: string }>(`/usuarios/${nuevoUsuarioId}/invitacion`, { method: "POST" });
+        setInvitacionLink(`${window.location.origin}/activar-cuenta/${token}`);
+        setInvitacionCopiado(false);
+        cargarUsuarios();
+      }
+
       setDrawerAbierto(false);
       cargar();
-    } catch {
-      toast("No se pudo guardar la secretaría", "error");
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "No se pudo guardar la secretaría", "error");
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function copiarInvitacion() {
+    if (!invitacionLink) return;
+    navigator.clipboard.writeText(invitacionLink).then(() => {
+      setInvitacionCopiado(true);
+      setTimeout(() => setInvitacionCopiado(false), 2000);
+    });
   }
 
   return (
@@ -245,6 +312,7 @@ export default function SecretariasPage() {
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
                 >
                   <option value="">Vacante / sin titular</option>
+                  <option value={NUEVO_TITULAR}>+ Registrar una persona nueva…</option>
                   {usuarios
                     .slice()
                     .sort((a, b) => a.nombre.localeCompare(b.nombre))
@@ -258,6 +326,56 @@ export default function SecretariasPage() {
                   Cambiar el titular queda registrado en el historial de la secretaría.
                 </span>
               </label>
+
+              {titularId === NUEVO_TITULAR && (
+                <div className="space-y-2 rounded-lg border border-institucional-200 bg-institucional-50/40 p-3">
+                  <label className="block">
+                    <span className="mb-1 block text-sm font-medium text-gray-700">Nombre completo</span>
+                    <input
+                      required
+                      value={nuevoTitular.nombre}
+                      onChange={(e) => setNuevoTitular({ ...nuevoTitular, nombre: e.target.value })}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-sm font-medium text-gray-700">Correo</span>
+                    <input
+                      required
+                      type="email"
+                      value={nuevoTitular.email}
+                      onChange={(e) => setNuevoTitular({ ...nuevoTitular, email: e.target.value })}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block">
+                      <span className="mb-1 block text-sm font-medium text-gray-700">Teléfono</span>
+                      <input
+                        value={nuevoTitular.telefono}
+                        onChange={(e) => setNuevoTitular({ ...nuevoTitular, telefono: e.target.value })}
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-sm font-medium text-gray-700">Rol</span>
+                      <select
+                        value={nuevoTitular.role}
+                        onChange={(e) => setNuevoTitular({ ...nuevoTitular, role: e.target.value })}
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                      >
+                        {ROLES_TITULAR.map((r) => (
+                          <option key={r} value={r}>{r}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    Se crea la cuenta y se genera un link de invitación de un solo uso para que active su acceso con
+                    su propia contraseña.
+                  </p>
+                </div>
+              )}
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-gray-700">Presupuesto asignado (RD$)</span>
                 <input
@@ -288,6 +406,23 @@ export default function SecretariasPage() {
             </button>
           </div>
         </form>
+      </Drawer>
+
+      <Drawer open={!!invitacionLink} onClose={() => setInvitacionLink(null)} title="Invitación generada">
+        <p className="mb-3 text-sm text-gray-600">
+          Copia este enlace y envíaselo al nuevo titular por el canal que sea (WhatsApp, correo personal). Es de un
+          solo uso y vence en 7 días — al entrar, confirma su correo real y crea su propia contraseña.
+        </p>
+        <div className="flex items-center gap-2 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-xs text-gray-700">
+          <span className="flex-1 truncate">{invitacionLink}</span>
+          <button
+            onClick={copiarInvitacion}
+            className="flex flex-shrink-0 items-center gap-1 rounded-md bg-institucional-600 px-2 py-1 text-xs font-semibold text-white hover:bg-institucional-700"
+          >
+            {invitacionCopiado ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+            {invitacionCopiado ? "Copiado" : "Copiar"}
+          </button>
+        </div>
       </Drawer>
     </div>
   );
