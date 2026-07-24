@@ -125,51 +125,67 @@ export default function DiaElectoralPage() {
   }, [eventoId, refreshTicker]);
 
   const municipioMesasRef = useRef<string | null>(null);
+  // Descarta respuestas de peticiones ya abandonadas (por cambio de
+  // municipio o por una petición más nueva), sin importar si la disparó el
+  // debounce del hover o el refresco en vivo de abajo.
+  const peticionMesasRef = useRef(0);
 
+  function cargarMesasEIncidencias(municipioId: string, eventoIdActual: string) {
+    const idPeticion = ++peticionMesasRef.current;
+    apiFetch<Recinto[]>(`/dia-electoral/mesas?municipioId=${municipioId}&eventoId=${eventoIdActual}`)
+      .then((data) => {
+        if (peticionMesasRef.current === idPeticion) setRecintos(data);
+      })
+      .catch(() => {
+        if (peticionMesasRef.current === idPeticion) setRecintos([]);
+      });
+    apiFetch<Incidencia[]>(`/dia-electoral/incidencias?municipioId=${municipioId}&eventoId=${eventoIdActual}`)
+      .then((data) => {
+        if (peticionMesasRef.current === idPeticion) setIncidencias(data);
+      })
+      .catch(() => {
+        if (peticionMesasRef.current === idPeticion) setIncidencias([]);
+      });
+  }
+
+  // El mapa dispara onDemarcacionChange en cada hover real (no solo al hacer
+  // clic), así que mover el cursor por varios municipios seguidos podía
+  // disparar una llamada de red por cada uno. Se espera un momento a que el
+  // cursor se "asiente" en un municipio antes de pedir sus mesas. Al cambiar
+  // de municipio se limpian los recintos de inmediato para no dejar viendo,
+  // ni por un instante, las mesas del municipio anterior.
   useEffect(() => {
     if (demarcacion?.tipo !== "municipio" || !eventoId) {
       municipioMesasRef.current = null;
       setRecintos(null);
+      setIncidencias(null);
       return;
     }
-    // El mapa dispara onDemarcacionChange en cada hover real (no solo al
-    // hacer clic), así que mover el cursor por varios municipios seguidos
-    // podía disparar una llamada de red por cada uno — de ahí la sensación
-    // de demora, además de que una respuesta vieja podía llegar después de
-    // una más nueva y pisarla. Se espera un momento a que el cursor se
-    // "asiente" en un municipio antes de pedir sus mesas, y se descarta
-    // cualquier respuesta que llegue después de haber cambiado de selección.
-    // Al cambiar de municipio (no en cada refresco en vivo del mismo) se
-    // limpian los recintos de inmediato para no dejar viendo, ni por un
-    // instante, las mesas del municipio anterior.
     if (municipioMesasRef.current !== demarcacion.id) {
       municipioMesasRef.current = demarcacion.id;
       setRecintos(null);
       setIncidencias(null);
     }
-    let cancelado = false;
     const demarcacionId = demarcacion.id;
-    const timer = setTimeout(() => {
-      apiFetch<Recinto[]>(`/dia-electoral/mesas?municipioId=${demarcacionId}&eventoId=${eventoId}`)
-        .then((data) => {
-          if (!cancelado) setRecintos(data);
-        })
-        .catch(() => {
-          if (!cancelado) setRecintos([]);
-        });
-      apiFetch<Incidencia[]>(`/dia-electoral/incidencias?municipioId=${demarcacionId}&eventoId=${eventoId}`)
-        .then((data) => {
-          if (!cancelado) setIncidencias(data);
-        })
-        .catch(() => {
-          if (!cancelado) setIncidencias([]);
-        });
-    }, 300);
-    return () => {
-      cancelado = true;
-      clearTimeout(timer);
-    };
-  }, [demarcacion, eventoId, refreshTicker]);
+    const timer = setTimeout(() => cargarMesasEIncidencias(demarcacionId, eventoId), 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demarcacion, eventoId]);
+
+  // Refresco en vivo (SSE "cambio-votos", nacional): a diferencia de arriba,
+  // esto NO debe compartir el debounce del hover — antes sí lo compartía
+  // (mismo useEffect, con refreshTicker en las dependencias), así que en un
+  // día con confirmaciones seguidas en cualquier parte del país el
+  // temporizador de 300ms se reiniciaba una y otra vez sin llegar nunca a
+  // completarse: el panel de mesas parecía tardar para siempre en cargar.
+  // Acá se pide de inmediato, sin esperar, y solo si ya hay un municipio
+  // seleccionado.
+  useEffect(() => {
+    if (refreshTicker === 0) return;
+    if (demarcacion?.tipo !== "municipio" || !eventoId) return;
+    cargarMesasEIncidencias(demarcacion.id, eventoId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshTicker]);
 
   async function reportarIncidencia(colegioId: string) {
     if (!eventoId || !descripcionNuevo.trim()) return;
