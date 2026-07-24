@@ -161,11 +161,16 @@ export default function DiaElectoralPage() {
   }
 
   // El mapa dispara onDemarcacionChange en cada hover real (no solo al hacer
-  // clic), así que mover el cursor por varios municipios seguidos podía
-  // disparar una llamada de red por cada uno. Se espera un momento a que el
-  // cursor se "asiente" en un municipio antes de pedir sus mesas. Al cambiar
-  // de municipio se limpian los recintos de inmediato para no dejar viendo,
-  // ni por un instante, las mesas del municipio anterior.
+  // clic) — igual que el padrón de Militantes, se pide de inmediato, sin
+  // esperar ningún tiempo artificial: las peticiones en sí son rápidas
+  // (~200ms), así que el retraso que sí se sentía era un debounce de 300ms
+  // que había acá antes, no la red. Pasar el cursor por varios municipios
+  // seguidos ya no acumula peticiones porque cada una cancela la anterior
+  // (ver AbortController en cargarMesasEIncidencias) — el mismo patrón que
+  // ya usa Militantes, solo que ahí no hacía falta el abort porque su
+  // propio fetch es más liviano. También reacciona al refresco en vivo
+  // (SSE "cambio-votos", nacional) para traer los conteos actualizados sin
+  // que el usuario tenga que mover el cursor de nuevo.
   useEffect(() => {
     if (demarcacion?.tipo !== "municipio" || !eventoId) {
       municipioMesasRef.current = null;
@@ -178,26 +183,9 @@ export default function DiaElectoralPage() {
       setRecintos(null);
       setIncidencias(null);
     }
-    const demarcacionId = demarcacion.id;
-    const timer = setTimeout(() => cargarMesasEIncidencias(demarcacionId, eventoId), 300);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [demarcacion, eventoId]);
-
-  // Refresco en vivo (SSE "cambio-votos", nacional): a diferencia de arriba,
-  // esto NO debe compartir el debounce del hover — antes sí lo compartía
-  // (mismo useEffect, con refreshTicker en las dependencias), así que en un
-  // día con confirmaciones seguidas en cualquier parte del país el
-  // temporizador de 300ms se reiniciaba una y otra vez sin llegar nunca a
-  // completarse: el panel de mesas parecía tardar para siempre en cargar.
-  // Acá se pide de inmediato, sin esperar, y solo si ya hay un municipio
-  // seleccionado.
-  useEffect(() => {
-    if (refreshTicker === 0) return;
-    if (demarcacion?.tipo !== "municipio" || !eventoId) return;
     cargarMesasEIncidencias(demarcacion.id, eventoId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshTicker]);
+  }, [demarcacion, eventoId, refreshTicker]);
 
   async function reportarIncidencia(colegioId: string) {
     if (!eventoId || !descripcionNuevo.trim()) return;
