@@ -34,7 +34,14 @@ export class ApiError extends Error {
   }
 }
 
-async function tryRefresh(): Promise<string | null> {
+// Exportado (RF nuevo): además de usarlo `apiFetch` internamente para
+// reintentar tras un 401, lo necesita cualquier conexión SSE (EventSource)
+// que se abra para quedarse viva por horas — a diferencia de un fetch normal,
+// una conexión SSE no pasa por `apiFetch` ni se reintenta sola con un token
+// nuevo, así que si el access token vence mientras la conexión sigue abierta
+// (típico en una jornada electoral de todo el día), quedaba reconectando en
+// bucle con el mismo token vencido, generando 401 repetidos para siempre.
+export async function refreshAccessToken(): Promise<string | null> {
   const { refreshToken } = getTokens();
   if (!refreshToken) return null;
   const res = await fetch(`${API_URL}/auth/refresh`, {
@@ -100,7 +107,7 @@ export async function apiFetch<T = unknown>(
 
   let res = await doFetch(accessToken);
   if (res.status === 401 && accessToken) {
-    const newToken = await tryRefresh();
+    const newToken = await refreshAccessToken();
     if (newToken) res = await doFetch(newToken);
   }
 

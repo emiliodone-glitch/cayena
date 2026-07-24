@@ -5,7 +5,7 @@ import { MapContainer, GeoJSON } from "react-leaflet";
 import type { Map as LeafletMap } from "leaflet";
 import * as L from "leaflet";
 import type { Feature, FeatureCollection } from "geojson";
-import { apiFetch, API_URL, getAccessToken } from "@/lib/api";
+import { apiFetch, API_URL, getAccessToken, refreshAccessToken } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { partirEnLineas, anillosDe, anchoHorizontalEnPunto, mayorAnillo, centroideMayorAnillo } from "@/lib/mapaEtiquetas";
 
@@ -110,6 +110,11 @@ export function MapaDiaElectoral({
   // `mousemove` más abajo (ver por qué en ese efecto).
   const elementLayerRef = useRef(new Map<Element, L.Path>());
   const resaltadoRef = useRef<L.Path | null>(null);
+  // Última posición conocida del cursor (RF nuevo) — se necesita para
+  // re-evaluar qué demarcación hay debajo justo después de un cambio de
+  // vista programático (fitBounds al entrar a un nivel nuevo), ya que ahí
+  // no hay un mousemove real que dispare el hit-test.
+  const ultimaPosicionRef = useRef<{ x: number; y: number } | null>(null);
 
   const autoNavegoRef = useRef(false);
   useEffect(() => {
@@ -184,10 +189,15 @@ export function MapaDiaElectoral({
     let reintentoTimer: ReturnType<typeof setTimeout> | null = null;
     let intentos = 0;
 
-    function conectar() {
+    async function conectar() {
       if (cerrado) return;
-      const token = getAccessToken();
-      if (!token) return;
+      // Refresca antes de conectar (RF nuevo): esta conexión se queda abierta
+      // mientras la pantalla de Día Electoral esté abierta, potencialmente
+      // horas — sin refrescar, el access token guardado vence a mitad de
+      // jornada y la reconexión entraba en un bucle de 401 con el mismo
+      // token vencido, para siempre (ver comentario en refreshAccessToken).
+      const token = (await refreshAccessToken()) ?? getAccessToken();
+      if (!token || cerrado) return;
       fuente = new EventSource(`${API_URL}/eventos/stream?token=${encodeURIComponent(token)}`);
       fuente.addEventListener("cambio-votos", () => setRefreshVivo((t) => t + 1));
       fuente.onopen = () => {
@@ -323,6 +333,33 @@ export function MapaDiaElectoral({
     }
   }
 
+  // Hit-test manual compartido: recibe coordenadas de viewport (las mismas
+  // que `MouseEvent.clientX/Y`) y resalta + informa la demarcación que haya
+  // debajo, si la hay. Se usa tanto en cada `mousemove` real (más abajo)
+  // como justo después de un `fitBounds` programático (efecto de `geo` de
+  // abajo): al hacer clic para entrar a un nivel nuevo, el mapa se
+  // reencuadra bajo un cursor que no se movió, así que sin este segundo
+  // disparo el panel y el resaltado quedaban mostrando la demarcación del
+  // nivel anterior hasta el siguiente movimiento real del mouse — eso era
+  // el "rebote" en el primer clic y el municipio/distrito que no aparecía
+  // resaltado al seleccionarlo.
+  function evaluarPosicion(x: number, y: number) {
+    const el = document.elementFromPoint(x, y);
+    const layer = el ? elementLayerRef.current.get(el) : undefined;
+    const anterior = resaltadoRef.current;
+    if (layer === anterior) return;
+    if (anterior) anterior.setStyle({ weight: 1, color: "#94a3b8" });
+    if (layer) {
+      layer.setStyle({ weight: 3, color: "#123f1c" });
+      const props = (layer as unknown as { feature?: Feature }).feature?.properties as Propiedades | undefined;
+      if (props) {
+        setPanel(props);
+        avisarDemarcacion(props);
+      }
+    }
+    resaltadoRef.current = layer ?? null;
+  }
+
   useEffect(() => {
     if (!geo) return;
 
@@ -368,6 +405,13 @@ export function MapaDiaElectoral({
       map.invalidateSize();
       map.fitBounds(bounds, { padding: [4, 4], animate: false });
       actualizarEtiquetas();
+      // Re-evalúa qué demarcación queda bajo el cursor tras el reencuadre:
+      // este `fitBounds` no dispara ningún `mousemove` real, así que sin
+      // esto el hit-test manual de abajo no se entera de que la vista
+      // cambió (ver comentario de `evaluarPosicion`).
+      if (ultimaPosicionRef.current) {
+        evaluarPosicion(ultimaPosicionRef.current.x, ultimaPosicionRef.current.y);
+      }
     });
     window.addEventListener("resize", actualizarEtiquetas);
 
@@ -405,30 +449,16 @@ export function MapaDiaElectoral({
     // último evento manda, no se pierde precisión, pero se evita el trabajo
     // redundante que sentía como demora al mover el cursor por el mapa.
     let frameId: number | null = null;
-    let ultimoEvento: MouseEvent | null = null;
 
     function procesarFrame() {
       frameId = null;
-      const e = ultimoEvento;
-      if (!e) return;
-      const el = document.elementFromPoint(e.clientX, e.clientY);
-      const layer = el ? elementLayerRef.current.get(el) : undefined;
-      const anterior = resaltadoRef.current;
-      if (layer === anterior) return;
-      if (anterior) anterior.setStyle({ weight: 1, color: "#94a3b8" });
-      if (layer) {
-        layer.setStyle({ weight: 3, color: "#123f1c" });
-        const props = (layer as unknown as { feature?: Feature }).feature?.properties as Propiedades | undefined;
-        if (props) {
-          setPanel(props);
-          avisarDemarcacion(props);
-        }
-      }
-      resaltadoRef.current = layer ?? null;
+      const pos = ultimaPosicionRef.current;
+      if (!pos) return;
+      evaluarPosicion(pos.x, pos.y);
     }
 
     function onMouseMove(e: MouseEvent) {
-      ultimoEvento = e;
+      ultimaPosicionRef.current = { x: e.clientX, y: e.clientY };
       if (frameId == null) frameId = requestAnimationFrame(procesarFrame);
     }
 

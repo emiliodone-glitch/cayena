@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { Vote, ScanLine, Download, CalendarPlus, Plus, Search, Maximize2 } from "lucide-react";
-import { apiFetch, API_URL, getAccessToken, ApiError } from "@/lib/api";
+import { apiFetch, API_URL, getAccessToken, refreshAccessToken, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/components/Toast";
 import { Drawer } from "@/components/Drawer";
@@ -217,12 +217,41 @@ export default function DiaElectoralPage() {
   }
 
   // Ticker nacional en vivo: mismo canal SSE que el mapa, evento "cambio-votos".
+  // Reconecta con backoff y refresca el token en cada intento (RF nuevo):
+  // antes esta conexión se abría una sola vez con el token del momento y sin
+  // ningún manejo de error — si el access token vencía mientras la pantalla
+  // seguía abierta (normal en una jornada de todo el día), el navegador
+  // reintentaba solo, con su propio retry corto y sin backoff, contra el
+  // mismo token ya vencido: eso era el bucle de 401 repetidos en consola.
   useEffect(() => {
-    const token = getAccessToken();
-    if (!token) return;
-    const fuente = new EventSource(`${API_URL}/eventos/stream?token=${encodeURIComponent(token)}`);
-    fuente.addEventListener("cambio-votos", () => setRefreshTicker((t) => t + 1));
-    return () => fuente.close();
+    let cerrado = false;
+    let fuente: EventSource | null = null;
+    let reintentoTimer: ReturnType<typeof setTimeout> | null = null;
+    let intentos = 0;
+
+    async function conectar() {
+      if (cerrado) return;
+      const token = (await refreshAccessToken()) ?? getAccessToken();
+      if (!token || cerrado) return;
+      fuente = new EventSource(`${API_URL}/eventos/stream?token=${encodeURIComponent(token)}`);
+      fuente.addEventListener("cambio-votos", () => setRefreshTicker((t) => t + 1));
+      fuente.onopen = () => {
+        intentos = 0;
+      };
+      fuente.onerror = () => {
+        fuente?.close();
+        if (cerrado) return;
+        const espera = Math.min(2000 * 2 ** intentos, 30000);
+        intentos++;
+        reintentoTimer = setTimeout(conectar, espera);
+      };
+    }
+    conectar();
+    return () => {
+      cerrado = true;
+      if (reintentoTimer) clearTimeout(reintentoTimer);
+      fuente?.close();
+    };
   }, []);
 
   async function crearEvento(e: FormEvent) {
