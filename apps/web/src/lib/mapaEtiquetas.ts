@@ -254,7 +254,13 @@ function puntoSesgadoHaciaCentroide(
 // mantiene esta lista corta y explícita a propósito, para no repetir ese
 // efecto colateral.
 function anclaAjustadaPorNombre(nombre: string | undefined, anillo: number[][]): [number, number] | null {
-  if (nombre === "San Cristóbal") {
+  if (nombre === "San Cristóbal" || nombre === "Pedernales") {
+    // Pedernales: el centroide de área (lo que usa la regla general) cae
+    // muy cerca del límite con Oviedo, el municipio vecino que comparte
+    // buena parte de su rango de latitud — visualmente se ve "pegado" a esa
+    // frontera en vez de centrado en el territorio propio. El polo de
+    // inaccesibilidad (el punto más alejado de CUALQUIER borde, incluido
+    // ese) lo deja más adentro de la zona exclusiva de Pedernales.
     const polo = buscarPoloDeInaccesibilidad(anillo);
     return polo.punto;
   }

@@ -547,7 +547,14 @@ export function MapaDiaElectoral({
 
       <div className={`relative w-full overflow-hidden rounded-xl border border-gray-200 ${aspecto}`}>
         {loading && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/60">
+          // pointer-events-none (RF nuevo): sin esto, este overlay puramente
+          // decorativo le robaba el clic al mapa de abajo durante la ventana
+          // de carga de cada nivel (200-300ms, más larga la primera vez que
+          // se entra a Día Electoral porque además espera la jornada activa)
+          // — un clic justo en ese momento no llegaba a ninguna demarcación,
+          // y el "pop-in" del mapa recién cargado justo después se sentía
+          // como que "rebotaba" y hacía falta un segundo clic.
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-white/60">
             <span className="text-sm text-gray-400">Cargando…</span>
           </div>
         )}
