@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import jsQR from "jsqr";
-import { ScanLine, CheckCircle2, XCircle, Camera, CameraOff } from "lucide-react";
+import { ScanLine, CheckCircle2, XCircle, Camera, CameraOff, UserRound, Loader2 } from "lucide-react";
 import { apiFetch, ApiError } from "@/lib/api";
 
 type Actividad = { id: string; titulo: string; fecha: string };
 
 type Resultado = { ok: boolean; mensaje: string; nombre?: string };
+
+type MilitantePreview = { id: string; nombre: string; cedula: string; telefono: string | null };
 
 // Check-in con QR (RF nuevo): el organizador abre esta pantalla (funciona
 // igual desde el navegador de un celular) y escanea el carnet QR del
@@ -21,6 +23,8 @@ export default function CheckinActividadPage() {
   const [procesando, setProcesando] = useState(false);
   const [resultado, setResultado] = useState<Resultado | null>(null);
   const [errorCamara, setErrorCamara] = useState<string | null>(null);
+  const [preview, setPreview] = useState<MilitantePreview | null>(null);
+  const [buscandoPreview, setBuscandoPreview] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -38,6 +42,30 @@ export default function CheckinActividadPage() {
       })
       .catch(() => setActividades([]));
   }, []);
+
+  // Vista previa por cédula (RF nuevo): mientras se escribe a mano, busca al
+  // militante y muestra su nombre antes de confirmar — así el organizador
+  // detecta un typo o una persona equivocada antes de darle "Registrar", en
+  // vez de enterarse recién con el error. Con debounce para no pegarle a la
+  // API en cada tecla. Reusa /militantes/duplicados (mismo endpoint de la
+  // detección de duplicados al crear un militante); códigos de QR (el id
+  // interno, no la cédula) simplemente no hacen match acá y no muestran nada.
+  useEffect(() => {
+    const codigo = codigoManual.trim();
+    if (codigo.length < 5) {
+      setPreview(null);
+      setBuscandoPreview(false);
+      return;
+    }
+    setBuscandoPreview(true);
+    const timer = setTimeout(() => {
+      apiFetch<MilitantePreview[]>(`/militantes/duplicados?cedula=${encodeURIComponent(codigo)}`)
+        .then((resultados) => setPreview(resultados[0] ?? null))
+        .catch(() => setPreview(null))
+        .finally(() => setBuscandoPreview(false));
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [codigoManual]);
 
   async function registrar(codigo: string) {
     if (!actividadId || procesando) return;
@@ -190,6 +218,29 @@ export default function CheckinActividadPage() {
           Registrar
         </button>
       </form>
+
+      {buscandoPreview && (
+        <div className="mt-2 flex items-center gap-2 text-xs text-gray-400">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Buscando…
+        </div>
+      )}
+      {!buscandoPreview && codigoManual.trim().length >= 5 && (
+        <div
+          className={`mt-2 flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${
+            preview ? "border-institucional-200 bg-institucional-50 text-institucional-700" : "border-amber-200 bg-amber-50 text-amber-700"
+          }`}
+        >
+          <UserRound className="h-4 w-4 shrink-0" />
+          {preview ? (
+            <span>
+              {preview.nombre} — cédula {preview.cedula}
+              {preview.telefono && <span className="text-institucional-600/70"> · {preview.telefono}</span>}
+            </span>
+          ) : (
+            <span>Sin coincidencias por cédula — si es un código de carnet (QR), sigue de largo.</span>
+          )}
+        </div>
+      )}
 
       {resultado && (
         <div
