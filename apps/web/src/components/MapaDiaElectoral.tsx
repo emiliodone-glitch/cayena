@@ -253,10 +253,19 @@ export function MapaDiaElectoral({
   }, [panel?.id]);
 
   function avisarDemarcacion(props: Propiedades) {
-    if (!onDemarcacionChange || !props.id) return;
-    if (nivel === "nacional") onDemarcacionChange({ tipo: "provincia", id: props.id, nombre: props.nombre });
-    else if (nivel === "municipios") onDemarcacionChange({ tipo: "municipio", id: props.id, nombre: props.nombre });
-    else onDemarcacionChange({ tipo: "distrito", id: props.id, nombre: props.nombre });
+    if (!onDemarcacionChange) return;
+    if (nivel === "nacional") {
+      if (props.id) onDemarcacionChange({ tipo: "provincia", id: props.id, nombre: props.nombre });
+    } else if (nivel === "municipios") {
+      if (props.id) onDemarcacionChange({ tipo: "municipio", id: props.id, nombre: props.nombre });
+    } else if (municipioSeleccionado) {
+      // Las mesas electorales solo existen agrupadas por municipio, no por
+      // distrito municipal — se sigue avisando el municipio padre (no el
+      // distrito puntual bajo el cursor) para que el panel de "Mesas de..."
+      // de la página no desaparezca al entrar o pasar el mouse por sus
+      // distritos, tal como ya se mostraba al nivel de municipios.
+      onDemarcacionChange({ tipo: "municipio", id: municipioSeleccionado.id, nombre: municipioSeleccionado.nombre });
+    }
   }
 
   function drillDown(props: Propiedades) {
