@@ -29,21 +29,23 @@ export type DemarcacionElectoral =
 
 const COLOR_SIN_DATO = "#e2e8f0";
 
-// Escala verde institucional (color del partido), de claro a oscuro según el
-// porcentaje. "Sin dato" se mantiene gris neutro — nunca verde — para no
-// confundirse con "0% ya reportado". Es una gradación continua de 6 pasos
-// (no 3 colores discretos como el semáforo rojo/amarillo/verde del mapa de
-// militantes), así que aunque comparte familia de color con ese semáforo el
-// significado no choca: acá el tono siempre es progresión de participación,
-// nunca un estado puntual de "meta cumplida".
-function colorParticipacion(p: number | null | undefined): string {
+// Dos escalas distintas para no confundir a simple vista en qué modo está el
+// mapa: verde institucional (color del partido) para "% propia base", azul
+// para "% padrón" — mismos 6 pasos y umbrales en ambas, solo cambia la
+// familia de color. "Sin dato" se mantiene gris neutro en las dos — nunca se
+// confunde con "0% ya reportado".
+const ESCALA_VERDE = ["#164f22", "#1f7a34", "#4cae5c", "#6ec488", "#a8e0b6", "#d6f5dd"];
+const ESCALA_AZUL = ["#1e3a8a", "#1d4ed8", "#3b82f6", "#60a5fa", "#bfdbfe", "#eff6ff"];
+
+function colorParticipacion(p: number | null | undefined, modoColor: "propia" | "padron"): string {
   if (p == null) return COLOR_SIN_DATO;
-  if (p >= 80) return "#164f22";
-  if (p >= 60) return "#1f7a34";
-  if (p >= 40) return "#4cae5c";
-  if (p >= 20) return "#6ec488";
-  if (p > 0) return "#a8e0b6";
-  return "#d6f5dd";
+  const [c80, c60, c40, c20, cPositivo, cCero] = modoColor === "padron" ? ESCALA_AZUL : ESCALA_VERDE;
+  if (p >= 80) return c80;
+  if (p >= 60) return c60;
+  if (p >= 40) return c40;
+  if (p >= 20) return c20;
+  if (p > 0) return cPositivo;
+  return cCero;
 }
 
 function construirRuta(
@@ -175,7 +177,7 @@ export function MapaDiaElectoral({
     // Borde gris medio (no blanco): con 0% de participación en casi todo el
     // mapa, el relleno queda casi tan pálido como el fondo — un borde blanco
     // ahí desaparecía por completo y las demarcaciones se veían "pegadas".
-    return { fillColor: colorParticipacion(valor), fillOpacity: 0.85, color: "#94a3b8", weight: 1 };
+    return { fillColor: colorParticipacion(valor, modoColor), fillOpacity: 0.85, color: "#94a3b8", weight: 1 };
   }
 
   useEffect(() => {
@@ -471,7 +473,7 @@ export function MapaDiaElectoral({
           <div className="mb-1 font-semibold text-gray-600">{modoColor === "padron" ? "% del padrón electoral" : "% de militantes propios"}</div>
           <div className="flex items-center gap-1">
             {[0, 20, 40, 60, 80].map((v) => (
-              <span key={v} className="h-3 w-5" style={{ backgroundColor: colorParticipacion(v) }} />
+              <span key={v} className="h-3 w-5" style={{ backgroundColor: colorParticipacion(v, modoColor) }} />
             ))}
           </div>
           <div className="mt-0.5 flex justify-between text-gray-400">
@@ -612,7 +614,7 @@ function dibujarCanvas(canvas: HTMLCanvasElement, datos: FeatureCollection, modo
   for (const f of datos.features) {
     const props = f.properties as Propiedades;
     const valor = modoColor === "padron" ? props.porcentajePadron : props.porcentajePropia;
-    ctx.fillStyle = colorParticipacion(valor);
+    ctx.fillStyle = colorParticipacion(valor, modoColor);
     ctx.strokeStyle = "#94a3b8";
     ctx.lineWidth = 1;
     for (const anillo of anillosDe(f)) {
