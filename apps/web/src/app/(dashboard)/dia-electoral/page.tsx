@@ -127,19 +127,31 @@ export default function DiaElectoralPage() {
   const municipioMesasRef = useRef<string | null>(null);
   // Descarta respuestas de peticiones ya abandonadas (por cambio de
   // municipio o por una petición más nueva), sin importar si la disparó el
-  // debounce del hover o el refresco en vivo de abajo.
+  // debounce del hover o el refresco en vivo de abajo. Además de ignorar la
+  // respuesta, se CANCELA de verdad la petición anterior (AbortController)
+  // en vez de dejarla completarse en segundo plano — al pasar el cursor por
+  // varios municipios seguidos antes de que cada uno termine de responder,
+  // esto evita ir acumulando peticiones abandonadas todavía en vuelo.
   const peticionMesasRef = useRef(0);
+  const abortMesasRef = useRef<AbortController | null>(null);
 
   function cargarMesasEIncidencias(municipioId: string, eventoIdActual: string) {
+    abortMesasRef.current?.abort();
+    const controller = new AbortController();
+    abortMesasRef.current = controller;
     const idPeticion = ++peticionMesasRef.current;
-    apiFetch<Recinto[]>(`/dia-electoral/mesas?municipioId=${municipioId}&eventoId=${eventoIdActual}`)
+    apiFetch<Recinto[]>(`/dia-electoral/mesas?municipioId=${municipioId}&eventoId=${eventoIdActual}`, {
+      signal: controller.signal,
+    })
       .then((data) => {
         if (peticionMesasRef.current === idPeticion) setRecintos(data);
       })
       .catch(() => {
         if (peticionMesasRef.current === idPeticion) setRecintos([]);
       });
-    apiFetch<Incidencia[]>(`/dia-electoral/incidencias?municipioId=${municipioId}&eventoId=${eventoIdActual}`)
+    apiFetch<Incidencia[]>(`/dia-electoral/incidencias?municipioId=${municipioId}&eventoId=${eventoIdActual}`, {
+      signal: controller.signal,
+    })
       .then((data) => {
         if (peticionMesasRef.current === idPeticion) setIncidencias(data);
       })

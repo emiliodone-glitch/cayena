@@ -387,7 +387,21 @@ export function MapaDiaElectoral({
   // problema). Un `mousemove` real, en cambio, solo ocurre cuando el cursor
   // se mueve de verdad, así que basar todo en él elimina esa clase de bug.
   useEffect(() => {
-    function onMouseMove(e: MouseEvent) {
+    // El navegador puede disparar mousemove muchas más veces por segundo de
+    // las que la pantalla refresca (hasta cientos con mouses de alto
+    // polling) — sin limitarlo, cada uno forzaba un hit-test síncrono
+    // (`elementFromPoint`, que obliga a recalcular el layout) más un posible
+    // setState (React re-renderiza el panel completo). Se agrupa con
+    // requestAnimationFrame para procesar como mucho una vez por frame — el
+    // último evento manda, no se pierde precisión, pero se evita el trabajo
+    // redundante que sentía como demora al mover el cursor por el mapa.
+    let frameId: number | null = null;
+    let ultimoEvento: MouseEvent | null = null;
+
+    function procesarFrame() {
+      frameId = null;
+      const e = ultimoEvento;
+      if (!e) return;
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const layer = el ? elementLayerRef.current.get(el) : undefined;
       const anterior = resaltadoRef.current;
@@ -403,8 +417,17 @@ export function MapaDiaElectoral({
       }
       resaltadoRef.current = layer ?? null;
     }
+
+    function onMouseMove(e: MouseEvent) {
+      ultimoEvento = e;
+      if (frameId == null) frameId = requestAnimationFrame(procesarFrame);
+    }
+
     window.addEventListener("mousemove", onMouseMove);
-    return () => window.removeEventListener("mousemove", onMouseMove);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      if (frameId != null) cancelAnimationFrame(frameId);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nivel, municipioSeleccionado?.id]);
 

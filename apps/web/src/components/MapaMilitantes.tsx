@@ -703,7 +703,19 @@ export function MapaMilitantes({
   // cursor se mueve de verdad, así que basar todo en él elimina la clase
   // entera de "hover fantasma" sin depender de heurísticas de tiempo/posición.
   useEffect(() => {
-    function onMouseMove(e: MouseEvent) {
+    // Agrupado con requestAnimationFrame (RF nuevo): el navegador puede
+    // disparar mousemove muchas más veces por segundo de las que la
+    // pantalla refresca — sin límite, cada uno forzaba un hit-test síncrono
+    // (`elementFromPoint`, que obliga a recalcular el layout) más un
+    // posible setState. Se procesa como mucho una vez por frame; el último
+    // evento manda, sin perder precisión.
+    let frameId: number | null = null;
+    let ultimoEvento: MouseEvent | null = null;
+
+    function procesarFrame() {
+      frameId = null;
+      const e = ultimoEvento;
+      if (!e) return;
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const layer = el ? elementLayerRef.current.get(el) : undefined;
       const anterior = resaltadoRef.current;
@@ -719,8 +731,17 @@ export function MapaMilitantes({
       }
       resaltadoRef.current = layer ?? null;
     }
+
+    function onMouseMove(e: MouseEvent) {
+      ultimoEvento = e;
+      if (frameId == null) frameId = requestAnimationFrame(procesarFrame);
+    }
+
     window.addEventListener("mousemove", onMouseMove);
-    return () => window.removeEventListener("mousemove", onMouseMove);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      if (frameId != null) cancelAnimationFrame(frameId);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nivel, municipioSeleccionado?.id, onDemarcacionChange]);
 
