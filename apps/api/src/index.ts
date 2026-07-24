@@ -4,6 +4,7 @@ import { iniciarVerificacionPeriodica } from "./lib/alertas";
 import { iniciarRecordatorioActividades } from "./lib/recordatorios";
 import { iniciarVerificacionVotacion } from "./lib/alertasVotacion";
 import { iniciarRecordatorioVoto } from "./lib/recordatorioVoto";
+import { iniciarVerificacionReconocimientos } from "./lib/reconocimientos";
 
 const port = Number(process.env.PORT ?? 4000);
 const app = createApp();
@@ -14,4 +15,5 @@ app.listen(port, () => {
   iniciarRecordatorioActividades();
   iniciarVerificacionVotacion();
   iniciarRecordatorioVoto();
+  iniciarVerificacionReconocimientos();
 });

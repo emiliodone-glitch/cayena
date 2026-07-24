@@ -3,7 +3,9 @@ import { z } from "zod";
 import { prisma } from "@cayena/database";
 import { requireAuth, requireRole, requireModulo } from "../middleware/auth";
 import { asyncRoute, HttpError } from "../middleware/errorHandler";
-import { estaInactiva, periodoAnterior, tieneInformeDelPeriodo, ultimaActividad } from "../lib/saludSecretaria";
+import { estaInactiva, periodoAnterior, tieneInformeDelPeriodo } from "../lib/saludSecretaria";
+import { calcularRankingSecretarias } from "../lib/rankingSecretarias";
+import { calcularRango, type Periodo } from "../lib/periodo";
 
 export const secretariasRouter = Router();
 secretariasRouter.use(requireAuth);
@@ -62,58 +64,50 @@ secretariasRouter.get(
 // Ranking de secretarías: combina avance de objetivos, puntualidad de
 // informes y actividad reciente en un solo puntaje — mismo espíritu que el
 // ranking de promotores (/usuarios/ranking-captacion), pero a nivel
-// institucional en vez de individual.
+// institucional en vez de individual. El cálculo en sí vive en
+// lib/rankingSecretarias.ts, compartido con el job de reconocimientos.
+const rankingSecretariasQuerySchema = z.object({
+  periodo: z.enum(["semana", "mes", "trimestre", "todo", "custom"]).optional(),
+  desde: z.string().optional(),
+  hasta: z.string().optional(),
+});
+
 secretariasRouter.get(
   "/ranking",
   requireRole("SUPERADMIN", "JEFE_SECRETARIA", "AUDITOR"),
-  asyncRoute(async (_req, res) => {
-    const secretarias = await prisma.secretaria.findMany({
-      include: {
-        titular: { select: { nombre: true, active: true } },
-        metasPoa: { include: { avances: true } },
-        informes: { select: { id: true } },
-      },
-    });
+  asyncRoute(async (req, res) => {
+    const { periodo, desde, hasta } = rankingSecretariasQuerySchema.parse(req.query);
+    const rangoFecha = periodo && periodo !== "todo" ? calcularRango(periodo as Periodo, desde, hasta) : null;
 
-    const filas = await Promise.all(
-      secretarias.map(async (s) => {
-        const objetivos = s.metasPoa.map((m) => {
-          const totalAvance = m.avances.reduce((sum, a) => sum + a.valor, 0);
-          return m.indicadorObjetivo > 0 ? Math.min(1, totalAvance / m.indicadorObjetivo) : 0;
-        });
-        const avancePromedio =
-          objetivos.length > 0 ? Math.round((objetivos.reduce((s2, p) => s2 + p, 0) / objetivos.length) * 100) : null;
-        const reciente = await ultimaActividad(s.id);
-        const diasSinActividad = reciente ? Math.floor((Date.now() - reciente.getTime()) / (24 * 3600 * 1000)) : null;
+    const filas = await calcularRankingSecretarias(rangoFecha ? { inicio: rangoFecha.inicio, fin: rangoFecha.fin } : undefined);
 
-        // Puntaje 0-100: 50% avance de objetivos, 25% informes subidos
-        // (tope 5, o sea 20 puntos cada uno), 25% haber tenido actividad en
-        // los últimos 30 días — así una secretaría sin objetivos definidos
-        // todavía no queda en cero solo por eso.
-        const puntajeObjetivos = avancePromedio ?? 0;
-        const puntajeInformes = Math.min(5, s.informes.length) * 20;
-        const puntajeActividad = diasSinActividad != null && diasSinActividad <= 30 ? 100 : 0;
-        const puntaje = Math.round(puntajeObjetivos * 0.5 + puntajeInformes * 0.25 + puntajeActividad * 0.25);
+    // Tendencia (RF nuevo): mismo mecanismo que en el ranking de promotores
+    // — se compara contra el período anterior de igual duración. A
+    // diferencia de ese, acá solo "informes subidos" queda acotado al rango
+    // (avance de objetivos y actividad reciente son un estado VIGENTE, no
+    // algo reconstruible para una fecha pasada), así que el movimiento que
+    // se ve reflaja sobre todo los informes subidos en cada ventana.
+    let posicionAnteriorMap = new Map<string, number>();
+    if (rangoFecha) {
+      const filasAnterior = await calcularRankingSecretarias({ inicio: rangoFecha.inicioAnterior, fin: rangoFecha.finAnterior });
+      posicionAnteriorMap = new Map(filasAnterior.map((f, i) => [f.id, i + 1]));
+    }
 
-        return {
-          id: s.id,
-          nombre: s.nombre,
-          // El nombre del titular se muestra siempre que esté designado —
-          // "inactivo" (todavía no activó su cuenta) no es lo mismo que
-          // "vacante" (nadie designado); el frontend distingue ambos casos
-          // con titularActivo.
-          titular: s.titular?.nombre ?? null,
-          titularActivo: s.titular?.active ?? false,
-          avancePromedioObjetivos: avancePromedio,
-          informesSubidos: s.informes.length,
-          diasSinActividad,
-          puntaje,
-        };
-      }),
+    res.json(
+      filas.map((f, i) => ({
+        id: f.id,
+        nombre: f.nombre,
+        titular: f.titular,
+        titularActivo: f.titularActivo,
+        avancePromedioObjetivos: f.avancePromedioObjetivos,
+        informesSubidos: f.informesSubidos,
+        informesTope: f.informesTope,
+        diasSinActividad: f.diasSinActividad,
+        puntaje: f.puntaje,
+        posicionActual: i + 1,
+        posicionAnterior: posicionAnteriorMap.get(f.id) ?? null,
+      })),
     );
-
-    filas.sort((a, b) => b.puntaje - a.puntaje);
-    res.json(filas);
   }),
 );
 

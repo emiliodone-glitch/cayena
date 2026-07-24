@@ -49,17 +49,48 @@ usuariosRouter.get(
     const rangoFecha =
       periodo && periodo !== "todo" ? calcularRango(periodo as Periodo, desde, hasta) : null;
 
+    const whereBase = {
+      capturadoPorId: { not: null } as const,
+      ...(scopedSecretariaId ? { capturadoPor: { secretariaId: scopedSecretariaId } } : {}),
+    };
+
+    // Sin tope (RF nuevo): antes se cortaba en los primeros 20, así que un
+    // promotor #21 en adelante nunca podía ver dónde quedó — la cantidad de
+    // usuarios es chica (equipo de campo, no militantes), así que traer a
+    // todos no cuesta nada y permite resaltar la fila del usuario que mira
+    // la pantalla sin importar su posición.
     const conteos = await prisma.militante.groupBy({
       by: ["capturadoPorId"],
-      where: {
-        capturadoPorId: { not: null },
-        ...(scopedSecretariaId ? { capturadoPor: { secretariaId: scopedSecretariaId } } : {}),
-        ...(rangoFecha ? { createdAt: { gte: rangoFecha.inicio, lte: rangoFecha.fin } } : {}),
-      },
+      where: { ...whereBase, ...(rangoFecha ? { createdAt: { gte: rangoFecha.inicio, lte: rangoFecha.fin } } : {}) },
       _count: { _all: true },
       orderBy: { _count: { capturadoPorId: "desc" } },
-      take: 20,
     });
+
+    // Calidad de captación (RF nuevo), no solo cantidad: suma de los puntos
+    // de gamificación (Fase 2) que fueron acumulando los militantes que
+    // trajo cada promotor — un indicador de si esos militantes de verdad se
+    // quedan activos, no solo de que se registraron.
+    const puntosPorPromotor = await prisma.militante.groupBy({
+      by: ["capturadoPorId"],
+      where: { ...whereBase, ...(rangoFecha ? { createdAt: { gte: rangoFecha.inicio, lte: rangoFecha.fin } } : {}) },
+      _sum: { puntos: true },
+    });
+    const puntosMap = new Map(puntosPorPromotor.map((p) => [p.capturadoPorId as string, p._sum.puntos ?? 0]));
+
+    // Tendencia (RF nuevo): posición del mismo promotor en el período
+    // anterior de igual duración (ver calcularRango), para mostrar si subió
+    // o bajó. Sin sentido para "todo el tiempo" (no hay un "período
+    // anterior" acotado con el que comparar).
+    let posicionAnteriorMap = new Map<string, number>();
+    if (rangoFecha) {
+      const conteosAnterior = await prisma.militante.groupBy({
+        by: ["capturadoPorId"],
+        where: { ...whereBase, createdAt: { gte: rangoFecha.inicioAnterior, lte: rangoFecha.finAnterior } },
+        _count: { _all: true },
+        orderBy: { _count: { capturadoPorId: "desc" } },
+      });
+      posicionAnteriorMap = new Map(conteosAnterior.map((c, i) => [c.capturadoPorId as string, i + 1]));
+    }
 
     const usuarios = await prisma.user.findMany({
       where: { id: { in: conteos.map((c) => c.capturadoPorId as string) } },
@@ -69,8 +100,9 @@ usuariosRouter.get(
 
     res.json(
       conteos
-        .map((c) => {
-          const u = usuarioPorId.get(c.capturadoPorId as string);
+        .map((c, i) => {
+          const id = c.capturadoPorId as string;
+          const u = usuarioPorId.get(id);
           if (!u) return null;
           return {
             id: u.id,
@@ -78,10 +110,46 @@ usuariosRouter.get(
             role: u.role,
             secretaria: u.secretaria?.nombre ?? null,
             militantesCaptados: c._count._all,
+            puntosGenerados: puntosMap.get(id) ?? 0,
+            posicionAnterior: posicionAnteriorMap.get(id) ?? null,
+            posicionActual: i + 1,
           };
         })
         .filter((x): x is NonNullable<typeof x> => x !== null),
     );
+  }),
+);
+
+// "Salón de la fama" (RF nuevo): últimos ganadores de cada ciclo ya cerrado
+// (ver lib/reconocimientos.ts) — se traen los últimos ~200 registros
+// ordenados por fecha y se agrupan en memoria por tipo+periodo, quedándose
+// solo con el cicloId más reciente de cada combinación (comparar cicloId
+// como texto alcanza porque el formato siempre arranca con el año y tiene
+// ancho fijo: "2026-W30" < "2026-W31", "2026-07" < "2026-08", etc.).
+usuariosRouter.get(
+  "/reconocimientos",
+  requireRole("SUPERADMIN", "JEFE_SECRETARIA", "AUDITOR"),
+  requireModulo("ranking"),
+  asyncRoute(async (_req, res) => {
+    const registros = await prisma.reconocimientoRanking.findMany({
+      orderBy: { otorgadoAt: "desc" },
+      take: 200,
+    });
+
+    const porGrupo = new Map<string, typeof registros>();
+    for (const r of registros) {
+      const clave = `${r.tipo}:${r.periodo}`;
+      if (!porGrupo.has(clave)) porGrupo.set(clave, []);
+      porGrupo.get(clave)!.push(r);
+    }
+
+    const resultado: Record<string, Record<string, typeof registros>> = { PROMOTOR: {}, SECRETARIA: {} };
+    for (const [clave, filas] of porGrupo) {
+      const [tipo, periodo] = clave.split(":");
+      const cicloMasReciente = filas.reduce((max, f) => (f.cicloId > max ? f.cicloId : max), filas[0].cicloId);
+      resultado[tipo][periodo] = filas.filter((f) => f.cicloId === cicloMasReciente).sort((a, b) => a.rango - b.rango);
+    }
+    res.json(resultado);
   }),
 );
 

@@ -234,6 +234,7 @@ model User {
   confirmacionesVotoComoFiscal ConfirmacionVoto[]           @relation("ConfirmacionVotoFiscal")
   mesasComoResponsable         Colegio[]                    @relation("ResponsableMesa")
   incidenciasReportadas        IncidenciaMesa[]             @relation("IncidenciaReportador")
+  reconocimientosRanking       ReconocimientoRanking[]
 
   @@index([secretariaId])
 }
@@ -276,6 +277,7 @@ model Secretaria {
   metasPoa           MetaPOA[]
   informes           InformeSecretaria[]
   historialTitulares HistorialTitularSecretaria[]
+  reconocimientosRanking ReconocimientoRanking[]
 
   createdAt DateTime @default(now())
 }
@@ -715,7 +717,7 @@ model Notificacion {
   id                 String   @id @default(cuid())
   titulo             String
   cuerpo             String
-  tipo               String // OBRA | ACTIVIDAD | CONVOCATORIA | ALERTA_META | ALERTA_VOTACION | RECORDATORIO_VOTO
+  tipo               String // OBRA | ACTIVIDAD | CONVOCATORIA | ALERTA_META | ALERTA_VOTACION | RECORDATORIO_VOTO | RECONOCIMIENTO_RANKING
   enviadaAt          DateTime @default(now())
   destinatarios      Int      @default(0)
   // Si se llena, la notificación es dirigida a un responsable de territorio
@@ -725,6 +727,46 @@ model Notificacion {
   destinatarioUser   User?    @relation("NotificacionDestinatario", fields: [destinatarioUserId], references: [id], onDelete: Cascade)
 
   @@index([destinatarioUserId])
+}
+
+// Reconocimiento de ranking (RF nuevo): al cerrarse cada período (semana ISO,
+// mes o trimestre calendario) se guarda una "foto" de quién quedó en los
+// primeros 3 lugares — a diferencia de solo consultar el ranking en vivo,
+// esto sobrevive aunque los datos sigan cambiando después (la captación de
+// otros promotores no se detiene), y permite premiar el trabajo de los más
+// rankeados con un historial real en vez de solo la foto del momento actual.
+// Lo otorga automáticamente el job de apps/api/src/lib/reconocimientos.ts.
+model ReconocimientoRanking {
+  id String @id @default(cuid())
+
+  tipo String // PROMOTOR | SECRETARIA
+  // "semana" | "mes" | "trimestre" — son ciclos de CALENDARIO (semana ISO
+  // lunes-domingo, mes y trimestre naturales), distintos de las ventanas
+  // móviles que usan los mismos nombres en los filtros en vivo del ranking:
+  // ahí no hay un cierre discreto que premiar, acá sí.
+  periodo String
+  // Identifica el ciclo concreto ya cerrado (ej. "2026-W30", "2026-07",
+  // "2026-Q3") — evita otorgar el mismo período dos veces.
+  cicloId String
+  rango   Int // 1, 2 o 3
+
+  userId       String?
+  user         User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  secretariaId String?
+  secretaria   Secretaria? @relation(fields: [secretariaId], references: [id], onDelete: Cascade)
+
+  // "Foto" del nombre y del valor que le ganó ese lugar (militantes
+  // captados para promotor, puntaje 0-100 para secretaría) al momento de
+  // otorgarse — no se recalculan después aunque el usuario cambie de
+  // nombre o se borre.
+  nombre String
+  valor  Float
+
+  otorgadoAt DateTime @default(now())
+
+  @@unique([tipo, periodo, cicloId, rango])
+  @@index([userId])
+  @@index([secretariaId])
 }
 
 // ---------------------------------------------------------------------------
