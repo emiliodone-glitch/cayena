@@ -477,13 +477,49 @@ diaElectoralRouter.get(
     const alcanceUsuario = await resolverAlcance(req.user!);
     const municipioBase = await prisma.municipio.findUniqueOrThrow({
       where: { id: municipioId },
-      select: { provinciaId: true, electores: true },
+      select: { provinciaId: true, electores: true, nombre: true },
     });
     if (!puedeVerMunicipio(alcanceUsuario, municipioId, municipioBase.provinciaId)) {
       throw new HttpError(403, "No tienes acceso a este municipio");
     }
     const geo = loadDistritosMunicipalesGeo();
     const featuresMuni = geo.features.filter((f) => f.properties?.municipioId === municipioId);
+
+    // Un puñado de municipios (p. ej. La Laguna de Nisibón, Sabana Iglesia de
+    // La Vega) no tienen NINGUNA entrada en distritos-municipales.geojson —
+    // ni siquiera la "cabecera" que normalmente cubre lo no repartido — por
+    // un hueco en esa fuente geográfica. Sin este respaldo, el mapa se
+    // quedaba en blanco (FeatureCollection vacía) al entrar a ese nivel. Se
+    // muestra el municipio completo (su propio polígono) como una única
+    // demarcación en vez de nada.
+    if (featuresMuni.length === 0) {
+      if (alcanceUsuario?.nivel === "distrito") {
+        res.json({ type: "FeatureCollection", features: [] });
+        return;
+      }
+      const featureMunicipio = loadMunicipiosGeo().features.find((f) => f.properties?.id === municipioId);
+      if (!featureMunicipio) {
+        res.json({ type: "FeatureCollection", features: [] });
+        return;
+      }
+      const stats = await statsVotos("municipioId", eventoId, { municipioId });
+      const metas = await metasPorDemarcacion(eventoId, "municipioId");
+      res.json({
+        type: "FeatureCollection",
+        features: [
+          {
+            ...featureMunicipio,
+            properties: {
+              ...featureMunicipio.properties,
+              id: municipioId,
+              nombre: municipioBase.nombre,
+              ...propsVotoDemarcacion(municipioId, municipioBase.electores, stats, metas.get(municipioId)),
+            },
+          },
+        ],
+      });
+      return;
+    }
 
     const existentes = await prisma.distritoMunicipal.findMany({ where: { municipioId } });
     const porNombreExacto = new Map(existentes.map((d) => [normalizarDM(d.nombre), d]));
