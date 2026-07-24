@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MapContainer, GeoJSON } from "react-leaflet";
 import type { Map as LeafletMap } from "leaflet";
 import * as L from "leaflet";
@@ -211,19 +211,28 @@ export function MapaDiaElectoral({
     };
   }, []);
 
-  function estiloFeature(feature?: Feature) {
-    const props = feature?.properties as Propiedades | undefined;
-    const valor = modoColor === "padron" ? props?.porcentajePadron : props?.porcentajePropia;
-    // Borde gris medio (no blanco): con 0% de participación en casi todo el
-    // mapa, el relleno queda casi tan pálido como el fondo — un borde blanco
-    // ahí desaparecía por completo y las demarcaciones se veían "pegadas".
-    return { fillColor: colorParticipacion(valor, modoColor), fillOpacity: 0.85, color: "#94a3b8", weight: 1 };
-  }
+  // Memoizado (RF nuevo): react-leaflet reaplica `style` a TODAS las
+  // demarcaciones del mapa cada vez que la referencia de la función cambia
+  // — sin memoizar, `estiloFeature` se recreaba en cada render (incluido
+  // cada frame de hover, por el setPanel de más abajo), así que pasar el
+  // cursor por el mapa recoloreaba el mapa ENTERO en cada frame en vez de
+  // solo resaltar la demarcación bajo el cursor. Con esto, la referencia
+  // solo cambia cuando modoColor realmente cambia.
+  const estiloFeature = useCallback(
+    (feature?: Feature) => {
+      const props = feature?.properties as Propiedades | undefined;
+      const valor = modoColor === "padron" ? props?.porcentajePadron : props?.porcentajePropia;
+      // Borde gris medio (no blanco): con 0% de participación en casi todo el
+      // mapa, el relleno queda casi tan pálido como el fondo — un borde blanco
+      // ahí desaparecía por completo y las demarcaciones se veían "pegadas".
+      return { fillColor: colorParticipacion(valor, modoColor), fillOpacity: 0.85, color: "#94a3b8", weight: 1 };
+    },
+    [modoColor],
+  );
 
   useEffect(() => {
     geoLayerRef.current?.setStyle(estiloFeature);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modoColor]);
+  }, [modoColor, estiloFeature]);
 
   // Cierra el formulario de editar meta al cambiar de demarcación (hover u
   // otra) — sin esto, quedaba abierto mostrando/editando la meta de la
